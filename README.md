@@ -1,7 +1,5 @@
 # leghorn
 
-[![ci](https://github.com/gmhoward9289-ops/leghorn/actions/workflows/ci.yml/badge.svg)](https://github.com/gmhoward9289-ops/leghorn/actions/workflows/ci.yml)
-
 A full-screen live dashboard you leave open on a second monitor while many
 Claude Code sessions work: every live session joined to its worktree and
 **real git state**, your **GitHub CI and open PRs** with failures pinned until
