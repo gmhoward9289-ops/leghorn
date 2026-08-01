@@ -1,0 +1,85 @@
+.TH LEGHORN 1 "August 2026" "leghorn 0.1" "User Commands"
+.SH NAME
+leghorn \- live dashboard for Claude Code sessions, git state, and GitHub CI
+.SH SYNOPSIS
+.B leghorn
+[\fB\-i\fR \fISECS\fR]
+[\fB\-\-no\-git\fR]
+[\fB\-\-no\-commits\fR]
+[\fB\-\-no\-github\fR]
+[\fB\-\-github\-interval\fR \fISECS\fR]
+[\fB\-\-commits\-width\fR \fICOLS\fR]
+.SH DESCRIPTION
+.B leghorn
+is a full-screen curses view you leave open on a second monitor while many
+Claude Code sessions work. Three panes: every live session joined to its
+worktree and real git state (SESSIONS), CI runs and open PRs across every
+GitHub clone with failures pinned until they go green (GITHUB), and a commit
+feed across every repo and branch, newest first (COMMITS).
+.PP
+Read-only by construction: it runs
+.BR claudectl ,
+.BR gh ,
+and read-only git plumbing, and never writes to a tree, a registry or a
+session. Every data source is optional and degrades to a labelled gap rather
+than an error \- no claudectl means no status column, no gh authentication
+means the GitHub pane says it cannot see instead of pretending nothing is
+happening.
+.SH OPTIONS
+.TP
+.BR \-i ", " \-\-interval " " \fISECS\fR
+Seconds between session/git refreshes (default 5).
+.TP
+.B \-\-no\-git
+Skip the per-tree git probes.
+.TP
+.B \-\-no\-commits
+Hide the commit pane.
+.TP
+.B \-\-no\-github
+Hide the GitHub pane; no gh calls are made at all.
+.TP
+.BR \-\-github\-interval " " \fISECS\fR
+Seconds between gh sweeps (default 75). The session loop never waits on it.
+.TP
+.BR \-\-commits\-width " " \fICOLS\fR
+Fix the commit pane width instead of scaling it.
+.TP
+.B \-\-version
+Print the version and exit.
+.SH KEYS
+.TP
+.B q / esc
+quit
+.TP
+.B r
+refresh everything now, including the gh sweep
+.TP
+.B s / f
+cycle sort / filter
+.TP
+.B g
+toggle the per-tree git probes
+.TP
+.B tab
+cycle focus: sessions, github, commits
+.TP
+.B j / k, arrows
+move selection; 0 / G jump to top / bottom
+.TP
+.B enter
+detail overlay for the selected row
+.TP
+.B ?
+help: what each screen and symbol means
+.SH ENVIRONMENT
+.TP
+.B LEGHORN_ROOT
+Directory the clones live under (default ~/GitHub). The commit feed walks
+every repo in it; the GitHub pane asks gh about the ones with a github.com
+origin.
+.SH SEE ALSO
+.BR gh (1),
+.BR git (1)
+.SH AUTHOR
+George M. Howard <dev@swamplink.com>

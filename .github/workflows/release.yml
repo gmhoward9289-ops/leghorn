@@ -1,0 +1,298 @@
+name: release
+
+# Builds the distributables for a tag, attaches them to the release, and
+# publishes everywhere at once: PyPI and npm (both via OIDC trusted
+# publishing, no stored tokens), the signed apt repo on gh-pages, and the
+# Homebrew tap. Each publish job fails alone; the release artifacts land
+# either way.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish_apt_repo:
+        description: Run the apt-repo job even without a tag (re-publish the current version, without touching PyPI or npm)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Build the .deb
+        run: packaging/build-deb.sh
+
+      # The version lives in leghorn.py alone. A tag that disagrees with it
+      # would publish artifacts whose filenames contradict the release they
+      # hang off.
+      - name: Check the tag matches __version__
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          code_version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' leghorn.py)
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$code_version" != "$tag_version" ]; then
+            echo "tag $tag_version != __version__ $code_version" >&2
+            exit 1
+          fi
+
+      - name: Check the man page, formula and package.json match __version__
+        run: packaging/check-version-consistency.sh
+
+      # PEP 440 would rewrite a non-canonical version, so the wheel filename
+      # could disagree with the tag, the .deb and the man page.
+      - name: Check the wheel filename matches the version
+        run: |
+          code_version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' leghorn.py)
+          wheel_version=$(basename "$(ls dist/*.whl)" | cut -d- -f2)
+          echo "version / tag / deb / man : $code_version"
+          echo "wheel and sdist           : $wheel_version"
+          if [ "$code_version" != "$wheel_version" ]; then
+            echo "::error::PEP 440 rewrote $code_version to $wheel_version; pick a canonical version" >&2
+            exit 1
+          fi
+
+      - name: Verify the built package actually runs
+        run: |
+          python -m venv /tmp/v
+          /tmp/v/bin/pip install --quiet dist/*.whl
+          /tmp/v/bin/leghorn --version
+          /tmp/v/bin/python -c "import leghorn, ccboard"
+          /tmp/v/bin/python -m ccboard --json > /dev/null
+          test -f /tmp/v/share/man/man1/leghorn.1
+
+      - name: Verify the .deb installs and the man page is readable
+        run: |
+          sudo apt-get install -y ./dist/leghorn_*_all.deb
+          leghorn --version
+          man -w leghorn
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/*
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Pushing a tag does not create a GitHub Release, so uploading straight
+        # to one fails on a plain `git push --tags`. Create it if it is not
+        # there and upload either way, so the tag is the only step a release
+        # needs.
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+
+  # Publishes the tagged build to PyPI via trusted publishing (OIDC): PyPI
+  # trusts this repo's release.yml through the "pypi" environment, so no API
+  # token exists anywhere -- not in secrets, not on a laptop.
+  #
+  # One-time setup this job depends on and cannot do for itself: register a
+  # pending Trusted Publisher on PyPI for the project "leghorn", pointing at
+  # gmhoward9289-ops/leghorn, workflow release.yml, environment "pypi" (create
+  # the GitHub Environment too; unprotected is fine). Until then this job
+  # fails alone and the rest of the release still lands.
+  pypi:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - name: Drop the .deb -- PyPI takes wheels and sdists only
+        run: rm -f dist/*.deb
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # Publishes the tagged build to npm as "leghorn" via trusted publishing
+  # (OIDC), the same no-token pattern as the pypi job. Needs npm CLI >=
+  # 11.5.1, which actions/setup-node's bundled npm can lag behind.
+  #
+  # One-time setup this job depends on and cannot do for itself: on
+  # https://www.npmjs.com/package/leghorn/access (after the first manual
+  # publish, or via a placeholder publish), add a Trusted Publisher ->
+  # GitHub Actions pointing at gmhoward9289-ops/leghorn, workflow file
+  # release.yml, environment "npm" (create that GitHub Environment here too).
+  # Until that's registered, this job fails alone; PyPI and apt still publish.
+  npm:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm install -g npm@latest
+      - run: npm publish
+
+  # Publishes the .deb into a real, signed apt repo hosted on this repo's
+  # GitHub Pages (gh-pages branch), so users get `sudo apt install leghorn`
+  # and `apt upgrade` instead of a one-shot manual .deb download.
+  #
+  # Signing key: a dedicated, sign-only key (not a personal key), imported
+  # from the LEGHORN_APT_GPG_PRIVATE_KEY secret. Its public half is the master
+  # copy at packaging/apt/pubkey.asc, published unchanged as
+  # leghorn-archive-keyring.asc at the site root so `curl | gpg --dearmor`
+  # gets exactly what signed the Release file. Rotating it means: generate a
+  # new key, replace the secret, replace packaging/apt/pubkey.asc, tell
+  # existing users to re-import.
+  #
+  # Requires the gh-pages branch to already exist (bootstrapped once,
+  # separately -- this job only ever updates it, never creates it) and GitHub
+  # Pages to be enabled for the repo pointed at that branch.
+  apt-repo:
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_apt_repo
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the tag (for packaging/apt/pubkey.asc)
+        uses: actions/checkout@v7
+        with:
+          path: src
+
+      - name: Check out gh-pages
+        uses: actions/checkout@v7
+        with:
+          ref: gh-pages
+          path: gh-pages
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      - name: Install apt repo tooling
+        run: sudo apt-get update && sudo apt-get install -y apt-utils gnupg
+
+      - name: Import the signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.LEGHORN_APT_GPG_PRIVATE_KEY }}
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          fpr=$(echo "$GPG_PRIVATE_KEY" | gpg --batch --import-options show-only --import --with-colons 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}')
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          echo "KEYFPR=$fpr" >> "$GITHUB_ENV"
+
+      - name: Add the new .deb to the pool
+        run: |
+          deb=$(ls dist/*_all.deb)
+          install -D -m 0644 "$deb" "gh-pages/pool/main/l/leghorn/$(basename "$deb")"
+
+      - name: Publish the signing key alongside the repo
+        run: cp src/packaging/apt/pubkey.asc gh-pages/leghorn-archive-keyring.asc
+
+      - name: Rebuild the package index
+        working-directory: gh-pages
+        run: |
+          mkdir -p dists/stable/main/binary-all
+          apt-ftparchive packages pool > dists/stable/main/binary-all/Packages
+          gzip -9fk dists/stable/main/binary-all/Packages
+          apt-ftparchive \
+            -o APT::FTPArchive::Release::Origin=leghorn \
+            -o APT::FTPArchive::Release::Label=leghorn \
+            -o APT::FTPArchive::Release::Suite=stable \
+            -o APT::FTPArchive::Release::Codename=stable \
+            -o APT::FTPArchive::Release::Architectures=all \
+            -o APT::FTPArchive::Release::Components=main \
+            -o APT::FTPArchive::Release::Description="live dashboard for Claude Code sessions, git state, and GitHub CI" \
+            release dists/stable > dists/stable/Release
+
+      - name: Sign the release
+        working-directory: gh-pages
+        run: |
+          gpg --batch --yes --default-key "$KEYFPR" --clearsign -o dists/stable/InRelease dists/stable/Release
+          gpg --batch --yes --default-key "$KEYFPR" -abs -o dists/stable/Release.gpg dists/stable/Release
+
+      - name: Verify the signature the way apt will
+        run: gpg --verify gh-pages/dists/stable/InRelease
+
+      - name: Commit and push
+        working-directory: gh-pages
+        run: |
+          git config user.name "leghorn-release-bot"
+          git config user.email "dev@swamplink.com"
+          git add -A
+          git commit -m "Publish $GITHUB_REF_NAME" || echo "nothing changed"
+          git push origin gh-pages
+
+      - name: Discard the imported private key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/gnupg"
+
+  # Publishes packaging/leghorn.rb (this repo's master copy) into the tap repo
+  # (gmhoward9289-ops/homebrew-tap) as Formula/leghorn.rb, with a freshly
+  # computed sha256 for this tag's release tarball -- a manual checksum
+  # refresh is exactly how roost's v0.2 tarball once shipped from a formula
+  # that still read 0.2 and passed its own version assertion anyway.
+  #
+  # One-time setup this job depends on and cannot do for itself: a
+  # TAP_PUSH_TOKEN secret on this repo -- a fine-grained PAT scoped to
+  # gmhoward9289-ops/homebrew-tap with Contents: Read and write. The default
+  # GITHUB_TOKEN only carries permission inside this repo, not a second one.
+  homebrew-tap:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this repo (for packaging/leghorn.rb)
+        uses: actions/checkout@v7
+        with:
+          path: src
+
+      - name: Check out the tap
+        uses: actions/checkout@v7
+        with:
+          repository: gmhoward9289-ops/homebrew-tap
+          ref: master
+          path: tap
+          token: ${{ secrets.TAP_PUSH_TOKEN }}
+
+      - name: Compute the release tarball checksum
+        run: |
+          url="https://github.com/${{ github.repository }}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          sha256=$(curl -sL "$url" | sha256sum | cut -d' ' -f1)
+          echo "URL=$url" >> "$GITHUB_ENV"
+          echo "SHA256=$sha256" >> "$GITHUB_ENV"
+
+      - name: Write the formula with this release's url and checksum
+        run: |
+          sed -e "s#^  url \".*\"#  url \"$URL\"#" \
+              -e "s#^  sha256 \".*\"#  sha256 \"$SHA256\"#" \
+              src/packaging/leghorn.rb > tap/Formula/leghorn.rb
+
+      - name: Commit and push
+        working-directory: tap
+        run: |
+          git config user.name "leghorn-release-bot"
+          git config user.email "dev@swamplink.com"
+          git add Formula/leghorn.rb
+          git diff --cached --quiet && echo "nothing changed" || git commit -m "leghorn $GITHUB_REF_NAME"
+          git push origin master
