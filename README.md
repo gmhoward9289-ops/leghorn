@@ -84,14 +84,15 @@ Clones are discovered under `~/GitHub` (override: `LEGHORN_ROOT`).
 ```bash
 leghorn                  # three panes, refreshing every 5s
 leghorn -i 2             # ...every 2s
+leghorn --speed slow     # 5m session refresh, 6h gh sweep (also: ultra, fast, normal)
 leghorn --no-github      # hide the GitHub pane (no gh calls at all)
-leghorn --no-commits     # hide the commit feed
+leghorn --no-commits     # hide the commit feed; sessions and github go side by side
 leghorn --github-interval 120   # slower gh sweeps
 ```
 
 Keys: `q` quit · `r` refresh (including a gh sweep) · `s`/`f` cycle
-sort/filter · `tab` cycle panes · `j`/`k` move · `enter` detail ·
-`?` help — which explains what each screen and symbol *means*, not just the
+sort/filter · `p` cycle speed · `c` toggle commits · `tab` cycle panes ·
+`j`/`k` move · `enter` detail · `?` help — which explains what each screen and symbol *means*, not just the
 keys.
 
 The data layer is also a command of its own:

@@ -86,6 +86,26 @@ GITHUB_LIMIT = 40
 GITHUB_INTERVAL = 75  # seconds between gh sweeps; the 5s loop never waits on it
 GITHUB_MIN_H = 5      # below this the pane says nothing worth its border
 
+# (name, session interval, gh interval), fastest first. The two clocks scale
+# apart on purpose: a session collect is local git and costs milliseconds, but
+# a gh sweep is ~3s of network across the fleet against a rate-limited API, so
+# even "ultra" holds it to a minute. Anything under that is sweeps overlapping,
+# not fresher data.
+SPEEDS = (
+    ("ultra", 1.0, 60.0),
+    ("fast", 5.0, 75.0),
+    ("normal", 8.0, 120.0),
+    ("slow", 300.0, 21600.0),
+)
+DEFAULT_SPEED = "fast"
+
+
+def speed_settings(name):
+    for entry in SPEEDS:
+        if entry[0] == name:
+            return entry
+    return speed_settings(DEFAULT_SPEED)
+
 SORTS = ("attention", "context", "dirty", "name", "commit age")
 FILTERS = ("all", "contested", "needs attention", "uncommitted", "claimed")
 
@@ -159,6 +179,15 @@ class Model:
         self._wake.set()
         self._gh_wake.set()
 
+    def set_speed(self, interval, github_interval):
+        """Retune both clocks. Waking the threads is what makes it take effect:
+        each one re-reads its interval only after its current wait returns, and
+        a wait started under 'slow' is six hours long."""
+        with self.lock:
+            self.interval = interval
+            self.github_interval = github_interval
+        self.refresh_now()
+
     def stop(self):
         self._stop.set()
         self._wake.set()
@@ -167,13 +196,17 @@ class Model:
     def run(self):
         while not self._stop.is_set():
             self._collect()
-            self._wake.wait(self.interval)
+            with self.lock:
+                wait = self.interval
+            self._wake.wait(wait)
             self._wake.clear()
 
     def run_github(self):
         while not self._stop.is_set():
             self._collect_github()
-            self._gh_wake.wait(self.github_interval)
+            with self.lock:
+                wait = self.github_interval
+            self._gh_wake.wait(wait)
             self._gh_wake.clear()
 
     def _collect_github(self):
@@ -576,7 +609,8 @@ def commit_detail(c):
     ]
 
 
-def draw_header(win, w, rows, total, updated, busy, sort_mode, filt, gh_events=()):
+def draw_header(win, w, rows, total, updated, busy, sort_mode, filt, gh_events=(),
+                speed=DEFAULT_SPEED):
     contested = sum(1 for r in rows if r["contested"])
     dirty = len({r["git_dir"] for r in rows if cb.uncommitted(r)})
     behind = len({r["git_dir"] for r in rows if (r.get("git") or {}).get("behind")})
@@ -613,7 +647,10 @@ def draw_header(win, w, rows, total, updated, busy, sort_mode, filt, gh_events=(
         clock += " ●" if busy else "  "
         # Narrow terminals lose the mode labels before they lose the clock --
         # "when did this last update" is the one thing a wall display must keep.
-        for right in ("sort:%s  filter:%s  %s" % (sort_mode, filt, clock), clock):
+        for right in ("sort:%s  filter:%s  speed:%s  %s"
+                      % (sort_mode, filt, speed, clock),
+                      "sort:%s  filter:%s  %s" % (sort_mode, filt, clock),
+                      clock):
             if w - len(right) - 2 > col:
                 win.addstr(0, w - len(right) - 1, right, cp(C_DIM) | curses.A_DIM)
                 break
@@ -622,8 +659,8 @@ def draw_header(win, w, rows, total, updated, busy, sort_mode, filt, gh_events=(
 
 
 def draw_footer(win, h, w, message, updated=0.0, gh_updated=0.0):
-    keys = ("q quit  r refresh  s sort  f filter  g git  tab pane  "
-            "enter detail  ? help")
+    keys = ("q quit  r refresh  s sort  f filter  p speed  c commits  g git  "
+            "tab pane  enter detail  ? help")
     try:
         left = (message or keys)[: w - 2]
         win.addstr(h - 1, 1, left,
@@ -689,6 +726,9 @@ HELP = [
     ("q / esc", "quit"),
     ("r", "refresh everything now, including the gh sweep"),
     ("s / f", "cycle sort / filter"),
+    ("p", "cycle speed: " + " · ".join(
+        "%s %s/%s" % (n, cb.ago(i), cb.ago(g)) for n, i, g in SPEEDS)),
+    ("c", "toggle the commit feed (off = sessions and github side by side)"),
     ("g", "toggle the per-tree git probes"),
     ("tab", "cycle focus: sessions, github, commits"),
     ("j / k, arrows", "move selection · 0 / G top / bottom"),
@@ -736,8 +776,10 @@ def loop(stdscr, model, args):
     sel = commit_sel = gh_sel = scroll = commit_scroll = gh_scroll = 0
     focus = "sessions"
     sort_mode, filt = SORTS[0], FILTERS[0]
-    modal = None  # None | "help" | "detail" | "ghdetail"
+    modal = None  # None | "help" | "detail" | "ghdetail" | "commitdetail"
     message = ""
+    want_commits = args.commits
+    speed = args.speed
 
     while True:
         rows_all, commits, updated, warn, error, loading, busy = model.snapshot()
@@ -752,7 +794,7 @@ def loop(stdscr, model, args):
         # not a degraded one, and the feed is half the reason to leave this open.
         body_h = max(3, h - 2)
         stacked = False
-        if not args.commits:
+        if not want_commits:
             show_commits, commits_w = False, 0
         elif w >= MIN_SPLIT_W:
             show_commits, commits_w = True, commits_width(w, args.commits_width)
@@ -770,14 +812,24 @@ def loop(stdscr, model, args):
         # blank. Sessions get what they need up to two thirds of the column;
         # a warning still earns the pane, because "cannot see github" and
         # "nothing is happening" must not render identically.
-        show_github = args.github and (gh_events or gh_warn) \
-            and left_h >= 5 + GITHUB_MIN_H
-        if show_github:
-            need = len(rows) + 3 if rows else 4
-            sessions_h = max(5, min(need, left_h - GITHUB_MIN_H, left_h * 2 // 3))
-            github_h = left_h - sessions_h
+        have_github = args.github and (gh_events or gh_warn)
+
+        # With commits off there is a whole column free, so the two remaining
+        # panes go side by side rather than stacking and leaving the right half
+        # blank. Each then gets full height, which is the point: both are lists
+        # that were previously fighting over one column's worth of rows.
+        side_by_side = have_github and not show_commits and w >= MIN_SPLIT_W
+        if side_by_side:
+            sessions_w = w // 2
+            show_github, sessions_h, github_h = True, left_h, left_h
         else:
-            sessions_h, github_h = left_h, 0
+            show_github = have_github and left_h >= 5 + GITHUB_MIN_H
+            if show_github:
+                need = len(rows) + 3 if rows else 4
+                sessions_h = max(5, min(need, left_h - GITHUB_MIN_H, left_h * 2 // 3))
+                github_h = left_h - sessions_h
+            else:
+                sessions_h, github_h = left_h, 0
 
         sessions = Pane(stdscr, 1, 0, sessions_h, max(20, sessions_w),
                         "SESSIONS", focus == "sessions")
@@ -802,8 +854,13 @@ def loop(stdscr, model, args):
                              cp(C_YELLOW) | curses.A_DIM)
 
         if show_github:
-            gh_pane = Pane(stdscr, 1 + sessions_h, 0, github_h, sessions.w,
-                           "GITHUB", focus == "github")
+            if side_by_side:
+                gh_pane = Pane(stdscr, 1, sessions.w + 1, github_h,
+                               max(20, w - sessions.w - 1),
+                               "GITHUB", focus == "github")
+            else:
+                gh_pane = Pane(stdscr, 1 + sessions_h, 0, github_h, sessions.w,
+                               "GITHUB", focus == "github")
             gh_pane.frame()
             gh_visible = max(1, gh_pane.h - 2)
             gh_sel = max(0, min(gh_sel, len(gh_events) - 1)) if gh_events else 0
@@ -829,7 +886,7 @@ def loop(stdscr, model, args):
                          focus == "commits", compact=stacked)
 
         draw_header(stdscr, w, rows, len(rows_all), updated, busy, sort_mode, filt,
-                    gh_events)
+                    gh_events, speed)
         note = message or error or (
             "%s -- status and context unavailable" % warn if warn else "")
         draw_footer(stdscr, h, w, note, updated, _gh_updated)
@@ -889,6 +946,21 @@ def loop(stdscr, model, args):
             model.use_git = not model.use_git
             model.refresh_now()
             message = "git probes %s" % ("on" if model.use_git else "off")
+        elif key == ord("p"):
+            names = [s[0] for s in SPEEDS]
+            speed = names[(names.index(speed) + 1) % len(names)]
+            _, iv, ghiv = speed_settings(speed)
+            model.set_speed(iv, ghiv)
+            message = "speed: %s (%s sessions, %s github)" % (
+                speed, cb.ago(iv), cb.ago(ghiv))
+        elif key == ord("c"):
+            want_commits = not want_commits
+            model.want_commits = want_commits
+            if want_commits:
+                model.refresh_now()
+            elif focus == "commits":
+                focus = "sessions"
+            message = "commits %s" % ("on" if want_commits else "off")
         elif key == ord("\t"):
             order = ["sessions"] + (["github"] if show_github else []) \
                 + (["commits"] if show_commits else [])
@@ -933,24 +1005,35 @@ def loop(stdscr, model, args):
 def main():
     ap = argparse.ArgumentParser(
         description="Full-screen live view of Claude Code sessions and git state.")
-    ap.add_argument("-i", "--interval", type=float, default=5.0, metavar="SECS",
-                    help="seconds between refreshes (default 5)")
+    ap.add_argument("-i", "--interval", type=float, default=None, metavar="SECS",
+                    help="seconds between refreshes (overrides --speed)")
+    ap.add_argument("--speed", choices=[s[0] for s in SPEEDS], default=DEFAULT_SPEED,
+                    help="refresh pace: " + ", ".join(
+                        "%s (%.0fs/%.0fs)" % (n, i, g) for n, i, g in SPEEDS)
+                         + " (default %s); cycle with p" % DEFAULT_SPEED)
     ap.add_argument("--no-git", dest="git", action="store_false",
                     help="skip the per-tree git probes")
     ap.add_argument("--no-commits", dest="commits", action="store_false",
-                    help="hide the commit pane and use the full width")
+                    help="hide the commit pane; sessions and github go side by side")
     ap.add_argument("--no-github", dest="github", action="store_false",
                     help="hide the GitHub pane (no gh calls at all)")
-    ap.add_argument("--github-interval", type=float, default=GITHUB_INTERVAL,
-                    metavar="SECS",
-                    help="seconds between gh sweeps (default %d)" % GITHUB_INTERVAL)
+    ap.add_argument("--github-interval", type=float, default=None, metavar="SECS",
+                    help="seconds between gh sweeps (overrides --speed)")
     ap.add_argument("--commits-width", type=int, metavar="COLS",
                     help="fix the commit pane at COLS wide instead of scaling it")
     ap.add_argument("--version", action="version", version="leghorn " + __version__)
     args = ap.parse_args()
 
-    model = Model(args.interval, args.git, args.commits, args.github,
-                  args.github_interval)
+    # An explicit interval always wins over the preset: someone who typed a
+    # number meant it, and p can still retune both from there.
+    _, interval, github_interval = speed_settings(args.speed)
+    if args.interval is not None:
+        interval = args.interval
+    if args.github_interval is not None:
+        github_interval = args.github_interval
+
+    model = Model(interval, args.git, args.commits, args.github,
+                  github_interval)
     worker = threading.Thread(target=model.run, daemon=True)
     worker.start()
     if args.github:
