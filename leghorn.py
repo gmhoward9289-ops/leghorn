@@ -565,6 +565,17 @@ def github_detail(e):
     return lines
 
 
+def commit_detail(c):
+    return [
+        ("repo", c["repo"]),
+        ("commit", c["sha"]),
+        ("author", c["author"]),
+        ("branch", c["refs"] or "-"),
+        ("subject", c["subject"]),
+        ("age", cb.ago(time.time() - c["ts"]) + " ago"),
+    ]
+
+
 def draw_header(win, w, rows, total, updated, busy, sort_mode, filt, gh_events=()):
     contested = sum(1 for r in rows if r["contested"])
     dirty = len({r["git_dir"] for r in rows if cb.uncommitted(r)})
@@ -610,12 +621,23 @@ def draw_header(win, w, rows, total, updated, busy, sort_mode, filt, gh_events=(
         pass
 
 
-def draw_footer(win, h, w, message):
+def draw_footer(win, h, w, message, updated=0.0, gh_updated=0.0):
     keys = ("q quit  r refresh  s sort  f filter  g git  tab pane  "
             "enter detail  ? help")
     try:
-        win.addstr(h - 1, 1, (message or keys)[: w - 2],
+        left = (message or keys)[: w - 2]
+        win.addstr(h - 1, 1, left,
                    cp(C_YELLOW) if message else cp(C_DIM) | curses.A_DIM)
+        # Data ages, bottom right: sorting and filtering are instant and local,
+        # so the only honest question is how old the data itself is.
+        ages = []
+        if updated:
+            ages.append("updated %s ago" % cb.ago(time.time() - updated))
+        if gh_updated:
+            ages.append("gh %s" % cb.ago(time.time() - gh_updated))
+        right = " · ".join(ages)
+        if right and w - len(right) - 2 > len(left) + 2:
+            win.addstr(h - 1, w - len(right) - 2, right, cp(C_DIM) | curses.A_DIM)
     except curses.error:
         pass
 
@@ -810,7 +832,7 @@ def loop(stdscr, model, args):
                     gh_events)
         note = message or error or (
             "%s -- status and context unavailable" % warn if warn else "")
-        draw_footer(stdscr, h, w, note)
+        draw_footer(stdscr, h, w, note, updated, _gh_updated)
 
         if modal == "help":
             overlay(stdscr, h, w, "HELP", HELP, "any key to close")
@@ -818,6 +840,9 @@ def loop(stdscr, model, args):
             overlay(stdscr, h, w, "SESSION", detail_lines(rows[sel]), "any key to close")
         elif modal == "ghdetail" and gh_events:
             overlay(stdscr, h, w, "GITHUB", github_detail(gh_events[gh_sel]),
+                    "any key to close")
+        elif modal == "commitdetail" and commits:
+            overlay(stdscr, h, w, "COMMIT", commit_detail(commits[commit_sel]),
                     "any key to close")
 
         stdscr.refresh()
@@ -846,9 +871,11 @@ def loop(stdscr, model, args):
         elif key == ord("s"):
             sort_mode = SORTS[(SORTS.index(sort_mode) + 1) % len(SORTS)]
             sel = scroll = 0
+            message = "sort: %s (applied, no refresh needed)" % sort_mode
         elif key == ord("f"):
             filt = FILTERS[(FILTERS.index(filt) + 1) % len(FILTERS)]
             sel = scroll = 0
+            message = "filter: %s (applied, no refresh needed)" % filt
         elif key in (ord("G"), curses.KEY_END):
             if focus == "sessions":
                 sel = max(0, len(rows) - 1)
@@ -871,6 +898,8 @@ def loop(stdscr, model, args):
                 modal = "detail"
             elif focus == "github" and gh_events:
                 modal = "ghdetail"
+            elif focus == "commits" and commits:
+                modal = "commitdetail"
         elif key in (curses.KEY_DOWN, ord("j")):
             if focus == "sessions":
                 sel = min(sel + 1, max(0, len(rows) - 1))
