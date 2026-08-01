@@ -95,6 +95,15 @@ def load_registry():
 
 
 def alive(pid):
+    # os.kill(pid, 0) is a liveness probe on POSIX and a loaded gun on Windows:
+    # CPython routes any signal other than CTRL_C_EVENT/CTRL_BREAK_EVENT to
+    # TerminateProcess, so the probe would kill every session it asked about.
+    if sys.platform == "win32":
+        out = subprocess.run(
+            ("tasklist", "/FI", "PID eq %d" % pid, "/NH", "/FO", "CSV"),
+            capture_output=True, text=True, timeout=10,
+        )
+        return ('"%d"' % pid) in out.stdout
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -253,7 +262,11 @@ def gather_git(dirs):
     now = time.time()
     by_top = {}
     for st in records:
-        by_top[st["toplevel"]] = {
+        # git reports toplevel with forward slashes even on Windows, while the
+        # dirs we look it up with are native. normcase folds both to one
+        # spelling (and is a no-op on POSIX), so the join is not
+        # separator-sensitive.
+        by_top[os.path.normcase(os.path.normpath(st["toplevel"]))] = {
             # Legacy shape, so leghorn and fmt() need no changes. "dirty" always
             # meant the worktree side; git-roost calls that "unstaged".
             "staged": st.get("staged", 0),
@@ -269,11 +282,12 @@ def gather_git(dirs):
 
     states = {}
     for d in unique:
-        hit = by_top.get(d)
+        key = os.path.normcase(os.path.normpath(d))
+        hit = by_top.get(key)
         if hit is None:
             # The dir may sit inside a tree probed under another root.
             for top, st in by_top.items():
-                if d.startswith(top.rstrip("/") + "/"):
+                if key.startswith(top.rstrip(os.sep) + os.sep):
                     hit = st
                     break
         states[d] = hit
