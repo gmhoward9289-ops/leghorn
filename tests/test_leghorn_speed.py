@@ -55,15 +55,40 @@ class SpeedTableTest(unittest.TestCase):
 
 
 class ModelSpeedTest(unittest.TestCase):
-    def test_set_speed_retunes_and_wakes_both_threads(self):
-        # Waking is the point: a wait started under slow is six hours long, so
-        # a preset change that only rewrote the fields would not take effect
-        # until the next tick.
+    def _model(self):
         m = lg.Model(5.0, True, True, True, 75.0)
         m._wake.clear()
         m._gh_wake.clear()
+        return m
+
+    def test_set_speed_retunes_and_wakes_the_session_thread(self):
+        # Waking is the point: a wait started under slow is six hours long, so
+        # a preset change that only rewrote the fields would not take effect
+        # until the next tick.
+        m = self._model()
         m.set_speed(300.0, 21600.0)
         self.assertEqual((m.interval, m.github_interval), (300.0, 21600.0))
+        self.assertTrue(m._wake.is_set())
+
+    def test_slowing_down_does_not_fire_a_github_sweep(self):
+        # Cycling p toward a slower preset must not sweep: four presses back
+        # around the ladder would otherwise mean four network sweeps in a row,
+        # the exact overlap the 60s floor exists to prevent.
+        m = self._model()
+        m.set_speed(300.0, 21600.0)
+        self.assertFalse(m._gh_wake.is_set())
+
+    def test_speeding_up_does_fire_one(self):
+        # Going the other way, the pending wait is longer than the new period,
+        # so it has to be cut short or the change does not take effect at all.
+        m = self._model()
+        m.set_speed(1.0, 60.0)
+        self.assertTrue(m._gh_wake.is_set())
+
+    def test_refresh_now_still_sweeps(self):
+        # r is the explicit "go now" and must keep hitting both.
+        m = self._model()
+        m.refresh_now()
         self.assertTrue(m._wake.is_set())
         self.assertTrue(m._gh_wake.is_set())
 

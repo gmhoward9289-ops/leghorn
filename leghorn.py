@@ -85,6 +85,7 @@ FRESH = 300  # a commit younger than this is "just happened" and gets highlighte
 GITHUB_LIMIT = 40
 GITHUB_INTERVAL = 75  # seconds between gh sweeps; the 5s loop never waits on it
 GITHUB_MIN_H = 5      # below this the pane says nothing worth its border
+GITHUB_MIN_W = 44     # narrower than this and a run line is all glyph, no name
 
 # (name, session interval, gh interval), fastest first. The two clocks scale
 # apart on purpose: a session collect is local git and costs milliseconds, but
@@ -180,13 +181,22 @@ class Model:
         self._gh_wake.set()
 
     def set_speed(self, interval, github_interval):
-        """Retune both clocks. Waking the threads is what makes it take effect:
-        each one re-reads its interval only after its current wait returns, and
-        a wait started under 'slow' is six hours long."""
+        """Retune both clocks. Waking the session thread is what makes the new
+        interval take effect: it re-reads only after its current wait returns,
+        and a wait started under 'slow' is six hours long.
+
+        The gh thread is woken only when its wait is now longer than the new
+        interval -- otherwise cycling p four times back to 'fast' would fire
+        four network sweeps in a row, which is exactly the overlap the
+        sixty-second floor in SPEEDS exists to prevent.
+        """
         with self.lock:
             self.interval = interval
+            sweep_sooner = github_interval < self.github_interval
             self.github_interval = github_interval
-        self.refresh_now()
+        self._wake.set()
+        if sweep_sooner:
+            self._gh_wake.set()
 
     def stop(self):
         self._stop.set()
@@ -636,7 +646,13 @@ def draw_header(win, w, rows, total, updated, busy, sort_mode, filt, gh_events=(
             stats.append(("%d ci red" % ci_red, C_RED))
         if ci_live:
             stats.append(("%d ci running" % ci_live, C_GREEN))
+        # Stop before the last column rather than at it: addstr writing into the
+        # final cell wraps onto row 1, which is the SESSIONS pane's top border,
+        # and the stray character sticks there until the header shrinks again.
         for i, (text, color) in enumerate(stats):
+            need = (2 if i else 0) + len(text)
+            if col + need >= w - 1:
+                break
             if i:
                 win.addstr(0, col, "· ", cp(C_DIM) | curses.A_DIM)
                 col += 2
@@ -779,7 +795,12 @@ def loop(stdscr, model, args):
     modal = None  # None | "help" | "detail" | "ghdetail" | "commitdetail"
     message = ""
     want_commits = args.commits
-    speed = args.speed
+    # An explicit -i or --github-interval means the running clocks are not the
+    # preset's, so naming one in the header would be a lie -- and this chrome
+    # exists to tell the truth about refresh state. Pressing p adopts a real
+    # preset and the label becomes honest again.
+    speed = "custom" if (args.interval is not None
+                         or args.github_interval is not None) else args.speed
 
     while True:
         rows_all, commits, updated, warn, error, loading, busy = model.snapshot()
@@ -818,9 +839,17 @@ def loop(stdscr, model, args):
         # panes go side by side rather than stacking and leaving the right half
         # blank. Each then gets full height, which is the point: both are lists
         # that were previously fighting over one column's worth of rows.
-        side_by_side = have_github and not show_commits and w >= MIN_SPLIT_W
+        # Two columns need width for both AND enough height for the github pane
+        # to say something; a one-row pane under a border is the "cannot see
+        # github" ambiguity the stacked path already refuses to create.
+        side_by_side = (have_github and not show_commits
+                        and w >= SESSIONS_MIN + GITHUB_MIN_W + 1
+                        and left_h >= GITHUB_MIN_H)
         if side_by_side:
-            sessions_w = w // 2
+            # Halve it, but never below what the sessions columns need nor so
+            # wide that github is left a stub. The gate above guarantees these
+            # two bounds cannot cross.
+            sessions_w = min(max(w // 2, SESSIONS_MIN), w - GITHUB_MIN_W - 1)
             show_github, sessions_h, github_h = True, left_h, left_h
         else:
             show_github = have_github and left_h >= 5 + GITHUB_MIN_H
@@ -870,6 +899,12 @@ def loop(stdscr, model, args):
         elif focus == "github":
             focus = "sessions"
 
+        # Clamp outside the draw block: a resize can hide the pane while focus
+        # and commit_sel are still pointing into it, and the detail overlay
+        # indexes commits directly. A stale index plus a shrunken feed is an
+        # IndexError that takes the whole dashboard down.
+        commit_sel = max(0, min(commit_sel, len(commits) - 1)) if commits else 0
+
         if show_commits:
             if stacked:
                 pane = Pane(stdscr, 1 + left_h, 0, commits_h, sessions.w,
@@ -880,10 +915,13 @@ def loop(stdscr, model, args):
             pane.frame()
             cstep = 1 if stacked else 2
             cvisible = max(1, (pane.h - 2) // cstep)
-            commit_sel = max(0, min(commit_sel, len(commits) - 1)) if commits else 0
             commit_scroll = clamp_scroll(commit_sel, commit_scroll, cvisible)
             draw_commits(pane, commits, commit_sel, commit_scroll,
                          focus == "commits", compact=stacked)
+        elif focus == "commits":
+            # Same guard the github pane has: never leave focus on a pane the
+            # user cannot see, or j/k/enter drive an invisible list.
+            focus = "sessions"
 
         draw_header(stdscr, w, rows, len(rows_all), updated, busy, sort_mode, filt,
                     gh_events, speed)
@@ -919,6 +957,14 @@ def loop(stdscr, model, args):
         if key in (ord("q"), 27):
             return
         if key == curses.KEY_RESIZE:
+            # Python's curses does not resize its notion of the screen on
+            # SIGWINCH by itself, so on some ncurses builds getmaxyx() keeps
+            # reporting the old size and the layout never reflows. Absent
+            # before 3.5 and on some platforms, hence the guard.
+            try:
+                curses.update_lines_cols()
+            except (AttributeError, curses.error):
+                pass
             continue
         if key == ord("?"):
             modal = "help"
@@ -948,7 +994,10 @@ def loop(stdscr, model, args):
             message = "git probes %s" % ("on" if model.use_git else "off")
         elif key == ord("p"):
             names = [s[0] for s in SPEEDS]
-            speed = names[(names.index(speed) + 1) % len(names)]
+            # "custom" is not in the ladder, so p steps onto it at the top
+            # rather than raising.
+            here = names.index(speed) + 1 if speed in names else 0
+            speed = names[here % len(names)]
             _, iv, ghiv = speed_settings(speed)
             model.set_speed(iv, ghiv)
             message = "speed: %s (%s sessions, %s github)" % (
