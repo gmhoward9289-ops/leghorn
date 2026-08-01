@@ -693,7 +693,7 @@ def sort_key(r):
     ctx = r["context_pct"] if isinstance(r["context_pct"], (int, float)) else -1
     return (
         not r["contested"],
-        str(r["status"]).lower() not in ATTENTION,
+        str(r["status"]).lower().replace(" ", "") not in ATTENTION,
         not uncommitted(r),
         -ctx,
     )
