@@ -142,11 +142,35 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+      # No registry-url here, deliberately. Giving setup-node a registry-url
+      # makes it write an .npmrc containing
+      #   //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+      # and nothing in this repo sets NODE_AUTH_TOKEN -- trusted publishing
+      # is the whole point, there is no token. The placeholder expands to an
+      # empty string, npm decides it is already configured for auth, and
+      # never performs the OIDC exchange: it published unauthenticated and
+      # the registry answered 404 (npm reports unauthorized writes to an
+      # existing package as 404, not 401). That is what failed v0.1 and v0.2.
+      # registry.npmjs.org is npm's default anyway, so dropping this loses
+      # nothing. Do not add it back without also setting NODE_AUTH_TOKEN.
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
+      # OIDC trusted publishing needs npm >= 11.5.1; node 22 still ships 10.x.
       - run: npm install -g npm@latest
+      # Diagnostics: if this job ever fails again, the log should say plainly
+      # which npm ran and whether an auth line was planted, instead of leaving
+      # it to be inferred from the absence of OIDC output.
+      - name: Publish environment
+        run: |
+          echo "npm version: $(npm --version)"
+          echo "userconfig: ${NPM_CONFIG_USERCONFIG:-<unset>}"
+          if [ -n "${NPM_CONFIG_USERCONFIG:-}" ] && [ -f "$NPM_CONFIG_USERCONFIG" ]; then
+            echo "--- .npmrc (values masked) ---"
+            sed 's/=.*/=<redacted>/' "$NPM_CONFIG_USERCONFIG"
+          else
+            echo "no userconfig .npmrc present (expected: OIDC path is clear)"
+          fi
       - run: npm publish
 
   # Publishes the .deb into a real, signed apt repo hosted on this repo's
