@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """leghorn -- full-screen live view of every Claude Code session and its git state.
 
-ccboard answers "what is the state right now" in one table, which is the right
+coop answers "what is the state right now" in one table, which is the right
 shape for a hook, a pipe or a glance. This is the other thing: a window you leave
 open on a second monitor while a dozen sessions work, where the eye catches a
 change without reading. Same facts, different job -- so the data layer is
-imported from ccboard rather than reimplemented, and this file is only ever a
+imported from coop rather than reimplemented, and this file is only ever a
 renderer.
 
     leghorn                  # three panes, refreshing every 5s
@@ -25,7 +25,7 @@ Stdlib only, on purpose. This runs unattended from shells with a minimal PATH;
 a venv or a pip dependency is one more thing that can be missing at 7am.
 curses is always there (macOS and Linux -- Windows has no stdlib curses).
 
-Read-only, like ccboard: it runs claudectl, gh, and read-only git plumbing,
+Read-only, like coop: it runs claudectl, gh, and read-only git plumbing,
 and never writes to a tree, a registry or a session.
 """
 
@@ -43,24 +43,24 @@ __version__ = "0.3"
 
 
 def load_data_layer():
-    """Import ccboard, wherever this install put it.
+    """Import coop, wherever this install put it.
 
-    Three layouts exist. A checkout or a deb/brew libexec keeps ccboard.py
+    Three layouts exist. A checkout or a deb/brew libexec keeps coop.py
     beside this file; a bin directory may keep it extensionless beside a
     symlink (resolve() follows the link first); a pip/pipx install puts both
     on sys.path as ordinary modules. Sibling file first: when both exist, the
     one next to this file is the one this file was shipped with.
     """
     here = Path(__file__).resolve().parent
-    for candidate in (here / "ccboard.py", here / "ccboard"):
+    for candidate in (here / "coop.py", here / "coop"):
         if candidate.is_file():
-            loader = importlib.machinery.SourceFileLoader("ccboard", str(candidate))
-            spec = importlib.util.spec_from_loader("ccboard", loader)
+            loader = importlib.machinery.SourceFileLoader("coop", str(candidate))
+            spec = importlib.util.spec_from_loader("coop", loader)
             module = importlib.util.module_from_spec(spec)
             loader.exec_module(module)
             return module
-    import ccboard
-    return ccboard
+    import coop
+    return coop
 
 
 cb = load_data_layer()
@@ -147,7 +147,7 @@ def cp(pair):
 
 
 class Model:
-    """Polls ccboard's data layer on a worker thread; the UI only ever reads.
+    """Polls coop's data layer on a worker thread; the UI only ever reads.
 
     GitHub gets its own thread and its own, much slower clock: a gh sweep costs
     ~3s of network across the fleet, and the 5s session/git loop must never

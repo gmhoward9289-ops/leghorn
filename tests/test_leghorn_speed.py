@@ -2,7 +2,7 @@
 """Tests for leghorn's refresh-speed presets.
 
 Importing leghorn.py is safe headless: nothing at module scope touches curses,
-and the data layer it loads is ccboard, which only shells out when called.
+and the data layer it loads is coop, which only shells out when called.
 """
 
 from __future__ import annotations

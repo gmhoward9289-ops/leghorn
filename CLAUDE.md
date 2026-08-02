@@ -1,7 +1,7 @@
 # Notes for AI agents working on leghorn
 
 Two files, stdlib only, Python 3.9+. `leghorn.py` is the curses renderer;
-`ccboard.py` is the data layer and a working CLI in its own right. Read-only by
+`coop.py` is the data layer and a working CLI in its own right. Read-only by
 construction: it shells out to `git`, `gh` and `claudectl` and must never write
 to a tree, a registry or a session. Every data source is optional and degrades
 to a labelled gap — "cannot see github" and "nothing is happening" must never
@@ -62,7 +62,7 @@ under `slow`.
 
 ## Status strings are spaced; the constants are not
 
-`ccboard.ATTENTION` holds `"needsinput"`, but a live status renders as
+`coop.ATTENTION` holds `"needsinput"`, but a live status renders as
 `"Needs Input"`. Every comparison needs
 `str(status).lower().replace(" ", "")`. Missing it in `sort_key` made the
 default sort silently no-op for a year of screenshots while the filter, which

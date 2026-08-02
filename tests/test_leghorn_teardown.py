@@ -30,7 +30,7 @@ def load(name):
     return mod
 
 
-cb = load("ccboard")
+cb = load("coop")
 leghorn = load("leghorn")
 
 

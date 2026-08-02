@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for ccboard's GitHub feed (github_feed and friends).
+"""Tests for coop's GitHub feed (github_feed and friends).
 
 Run:  python3 -m unittest discover -s ~/Claude/bin/tests -v
 
@@ -19,13 +19,13 @@ import time
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent.parent / "ccboard.py"
+SCRIPT = Path(__file__).resolve().parent.parent / "coop.py"
 
 
 def load():
     spec = importlib.util.spec_from_loader(
-        "ccboard_under_test",
-        importlib.machinery.SourceFileLoader("ccboard_under_test", str(SCRIPT)),
+        "coop_under_test",
+        importlib.machinery.SourceFileLoader("coop_under_test", str(SCRIPT)),
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

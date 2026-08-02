@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ccboard -- one table for every live Claude Code session: state and intent.
+"""coop -- one table for every live Claude Code session: state and intent.
 
 claudectl reads processes, so it knows status, context and burn, but for a label
 it has only the launch cwd -- which is ~/GitHub for nearly every session here, so
@@ -7,7 +7,7 @@ its project column says "GitHub" nineteen times. ccwork knows the opposite half:
 which worktree and branch a session holds and what it claimed it was doing, but
 nothing about whether that session is stuck, idle or eating context.
 
-ccboard joins them. `~/.claude/sessions/<pid>.json` carries the sessionId, and
+coop joins them. `~/.claude/sessions/<pid>.json` carries the sessionId, and
 ccwork's registry keys claims and occupancy by that same id, so pid is a clean
 join key across all three sources.
 
@@ -15,13 +15,13 @@ A third source is git itself: what each tree has uncommitted and how far it has
 drifted from origin. Sessions report what they mean to do; git reports what they
 have actually done, which is the only one of the two that can be wrong.
 
-    ccboard                  # one table, sorted by what needs attention
-    ccboard -w               # redraw every 3s (the top/htop view)
-    ccboard --log            # commit feed across every repo, newest first
-    ccboard --log -w         # ...live
-    ccboard --wide           # don't truncate the task text
-    ccboard --no-git         # skip the git columns if they are ever slow
-    ccboard --json           # joined records, for piping somewhere else
+    coop                  # one table, sorted by what needs attention
+    coop -w               # redraw every 3s (the top/htop view)
+    coop --log            # commit feed across every repo, newest first
+    coop --log -w         # ...live
+    coop --wide           # don't truncate the task text
+    coop --no-git         # skip the git columns if they are ever slow
+    coop --json           # joined records, for piping somewhere else
 
 Read-only by construction: it runs `claudectl --json`, reads two state files,
 and gets git facts from `git-roost --json`, which enforces read-only at the
@@ -859,7 +859,7 @@ def main():
             width = shutil.get_terminal_size((160, 24)).columns
             body = render(args, width)
             sys.stdout.write("\033[H\033[2J")
-            sys.stdout.write(time.strftime("ccboard  %H:%M:%S") + "\n\n")
+            sys.stdout.write(time.strftime("coop  %H:%M:%S") + "\n\n")
             sys.stdout.write("\n".join(body) + "\n")
             sys.stdout.flush()
             time.sleep(args.watch)

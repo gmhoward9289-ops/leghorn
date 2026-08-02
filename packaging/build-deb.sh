@@ -20,11 +20,11 @@ PKG="$BUILD/leghorn_${VERSION}_all"
 mkdir -p "$PKG/DEBIAN" "$PKG/usr/bin" "$PKG/usr/lib/leghorn" \
          "$PKG/usr/share/man/man1" "$PKG/usr/share/doc/leghorn"
 
-# leghorn.py and ccboard.py stay together in /usr/lib/leghorn -- the renderer
+# leghorn.py and coop.py stay together in /usr/lib/leghorn -- the renderer
 # resolves its data layer as a sibling of its own resolved path, so /usr/bin
 # carries only a symlink. resolve() follows it into the lib dir.
 install -m 0755 "$ROOT/leghorn.py" "$PKG/usr/lib/leghorn/leghorn.py"
-install -m 0644 "$ROOT/ccboard.py" "$PKG/usr/lib/leghorn/ccboard.py"
+install -m 0644 "$ROOT/coop.py" "$PKG/usr/lib/leghorn/coop.py"
 ln -s ../lib/leghorn/leghorn.py "$PKG/usr/bin/leghorn"
 
 gzip -9nc "$ROOT/leghorn.1" > "$PKG/usr/share/man/man1/leghorn.1.gz"
