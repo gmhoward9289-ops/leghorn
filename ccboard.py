@@ -228,6 +228,12 @@ def find_git_roost():
     found = shutil.which("git-roost")
     if found:
         return [found]
+    # In a frozen build (PyInstaller) sys.executable is leghorn.exe itself, not
+    # a Python interpreter -- [sys.executable, git_roost.py] would hand the
+    # script path to leghorn.exe as if it were one of its own arguments rather
+    # than running it. Only a source checkout can use this fallback.
+    if getattr(sys, "frozen", False):
+        return None
     if GIT_ROOST_FALLBACK.is_file():
         return [sys.executable, str(GIT_ROOST_FALLBACK)]
     return None

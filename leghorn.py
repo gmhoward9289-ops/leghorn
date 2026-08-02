@@ -23,7 +23,9 @@ dashboards -- one of them the same idea in Go.
 
 Stdlib only, on purpose. This runs unattended from shells with a minimal PATH;
 a venv or a pip dependency is one more thing that can be missing at 7am.
-curses is always there (macOS and Linux -- Windows has no stdlib curses).
+curses is stdlib on macOS and Linux; on Windows it comes from the
+windows-curses wheel (declared in pyproject.toml, installed automatically
+there, not needed anywhere else).
 
 Read-only, like ccboard: it runs claudectl, gh, and read-only git plumbing,
 and never writes to a tree, a registry or a session.
@@ -32,12 +34,21 @@ and never writes to a tree, a registry or a session.
 from __future__ import annotations
 
 import argparse
-import curses
 import importlib.machinery
 import importlib.util
+import sys
 import threading
 import time
 from pathlib import Path
+
+try:
+    import curses
+except ImportError:  # pragma: no cover -- exercised only on a bare Windows box
+    if sys.platform == "win32":
+        raise ImportError(
+            "leghorn needs the windows-curses package on Windows: pip install windows-curses"
+        ) from None
+    raise
 
 __version__ = "0.1"
 

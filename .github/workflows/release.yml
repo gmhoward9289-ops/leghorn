@@ -2,9 +2,9 @@ name: release
 
 # Builds the distributables for a tag, attaches them to the release, and
 # publishes everywhere at once: PyPI and npm (both via OIDC trusted
-# publishing, no stored tokens), the signed apt repo on gh-pages, and the
-# Homebrew tap. Each publish job fails alone; the release artifacts land
-# either way.
+# publishing, no stored tokens), the signed apt repo on gh-pages, the
+# Homebrew tap, and a PR against winget-pkgs for the Windows exe. Each
+# publish job fails alone; the release artifacts land either way.
 on:
   push:
     tags: ["v*"]
@@ -246,6 +246,83 @@ jobs:
       - name: Discard the imported private key
         if: always()
         run: rm -rf "$RUNNER_TEMP/gnupg"
+
+  # Builds a Windows executable and attaches it to the release, so the winget
+  # job below has something other than a bare .py script to point at. --onedir
+  # rather than --onefile: onefile re-extracts to %TEMP% on every launch (bad
+  # for a TUI people leave open on a second monitor) and is the specific shape
+  # that trips AV heuristics and stalls winget's moderation queue. Shipped as
+  # a zip, which winget's "zip" installer type unpacks directly.
+  #
+  # windows-curses has to be installed before the build, same as the test job
+  # in ci.yml -- PyInstaller freezes whatever `import curses` resolves to at
+  # build time, and ccboard.py comes along automatically since leghorn.py
+  # imports it directly (no --add-data needed for a sibling module).
+  windows-exe:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Build the onedir bundle
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip pyinstaller windows-curses
+          pyinstaller --onedir --name leghorn --console leghorn.py
+
+      - name: Smoke test the frozen exe
+        shell: bash
+        run: dist/leghorn/leghorn.exe --version
+
+      - name: Zip the bundle
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          (cd dist/leghorn && 7z a "../leghorn-${version}-windows-x64.zip" .)
+          echo "ZIP=dist/leghorn-${version}-windows-x64.zip" >> "$GITHUB_ENV"
+
+      - name: Attach to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber
+
+  # Opens (or updates) the PR against microsoft/winget-pkgs for this release,
+  # via the community winget-releaser action -- winget has no OIDC trusted-
+  # publishing equivalent, so this is the closest analog: no long-lived token
+  # on npm/PyPI's model, just a PAT scoped for exactly this one action to use.
+  #
+  # One-time setup this job depends on and cannot do for itself:
+  #   1. Fork microsoft/winget-pkgs to this account and keep the fork current
+  #      (winget-releaser pushes a branch to the fork, then opens the PR from
+  #      there against microsoft/winget-pkgs).
+  #   2. A WINGET_PAT secret on this repo -- unlike TAP_PUSH_TOKEN, this has to
+  #      be a *classic* PAT with the `public_repo` scope. Fine-grained PATs can
+  #      only be scoped to repos this account owns, and microsoft/winget-pkgs
+  #      is not one of them, so the classic-token/public_repo combination is
+  #      the only shape that works. That scope is wide -- write access to
+  #      every public repo on the account, not just the fork -- there is no
+  #      narrower option available.
+  #   3. The very first submission for a brand-new winget package identifier
+  #      needs a human-reviewed PR merged by Microsoft's moderators before
+  #      later versions auto-update smoothly. That review queue is outside
+  #      this workflow's control; until it lands, treat winget as best-effort.
+  # Until all three are in place, this job fails alone; everything else above
+  # still publishes.
+  winget:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, windows-exe]
+    runs-on: windows-latest
+    steps:
+      - uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: gmhoward9289-ops.leghorn
+          installers-regex: '\.zip$'
+          token: ${{ secrets.WINGET_PAT }}
 
   # Publishes packaging/leghorn.rb (this repo's master copy) into the tap repo
   # (gmhoward9289-ops/homebrew-tap) as Formula/leghorn.rb, with a freshly

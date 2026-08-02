@@ -5,8 +5,9 @@
 //
 // npm is here because plenty of Claude Code users live in the node ecosystem
 // and `npm i -g leghorn` is the install they will actually run. macOS and
-// Linux only: leghorn is a curses program and Windows has no stdlib curses --
-// package.json's "os" field tells npm so.
+// Linux only: Windows leghorn needs the windows-curses *pip* dependency
+// (see pyproject.toml), which npm has no way to deliver, so Windows gets
+// winget or pip instead -- package.json's "os" field tells npm so.
 //
 // There is deliberately no postinstall Python check. A failing postinstall would
 // break `npm ci` in a project that merely lists leghorn as a devDependency; a
@@ -25,7 +26,9 @@ const MIN = [3, 9]; // matches requires-python in pyproject.toml
 // forced install should still fail with a sentence rather than a curses
 // traceback from Python.
 if (process.platform === 'win32') {
-  process.stderr.write('leghorn is a curses program; Windows has no stdlib curses.\n');
+  process.stderr.write('leghorn does not ship for Windows over npm.\n');
+  process.stderr.write('  winget install gmhoward9289-ops.leghorn\n');
+  process.stderr.write('  or: pip install leghorn  (needs windows-curses too)\n');
   process.exit(1);
 }
 

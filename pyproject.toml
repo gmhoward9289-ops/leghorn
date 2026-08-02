@@ -18,15 +18,21 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS :: MacOS X",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.13",
     "Topic :: System :: Monitoring",
 ]
-# No dependencies, and there will not be any: leghorn has to run on whatever
-# Python is already on the box, including a bare system 3.9 on macOS.
-# (curses is stdlib on macOS and Linux; Windows is not supported.)
-dependencies = []
+# No dependencies on macOS/Linux, and there will not be any there: leghorn has
+# to run on whatever Python is already on the box, including a bare system 3.9
+# on macOS. curses is stdlib there but not on Windows at all, so windows-curses
+# (a drop-in `curses` backed by PDCurses) is pulled in for that platform only.
+# Its wheels currently top out at 3.13 -- a Windows install on a newer
+# interpreter will fail to resolve until upstream catches up; that's a
+# windows-curses gap, not something pinning requires-python here would fix,
+# since it would also needlessly cap macOS/Linux.
+dependencies = ["windows-curses; sys_platform == 'win32'"]
 
 [project.urls]
 Homepage = "https://github.com/gmhoward9289-ops/leghorn"
