@@ -14,6 +14,10 @@ on:
         description: Run the apt-repo job even without a tag (re-publish the current version, without touching PyPI or npm)
         type: boolean
         default: false
+      npm_probe:
+        description: Run only the npm job in probe mode -- diagnostics, an OIDC claim dump and a dry run. Publishes nothing.
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -133,7 +137,7 @@ jobs:
   # release.yml, environment "npm" (create that GitHub Environment here too).
   # Until that's registered, this job fails alone; PyPI and apt still publish.
   npm:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.npm_probe
     needs: build
     runs-on: ubuntu-latest
     environment: npm
@@ -171,7 +175,45 @@ jobs:
           else
             echo "no userconfig .npmrc present (expected: OIDC path is clear)"
           fi
-      - run: npm publish
+
+      # Probe only. Mints the same GitHub OIDC token npm would request and
+      # prints its claims -- never the token itself. Those claims are exactly
+      # what npmjs.com matches a Trusted Publisher against, so a mismatch
+      # between repository/workflow_ref/environment here and what is
+      # registered on the package is the whole failure, visible before a
+      # release depends on it.
+      - name: Probe -- mint an OIDC token and show its claims
+        if: inputs.npm_probe
+        run: |
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::ACTIONS_ID_TOKEN_REQUEST_URL is unset -- id-token: write is not in effect"
+            exit 1
+          fi
+          code=$(curl -sS -o /tmp/oidc.json -w '%{http_code}' \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org")
+          echo "id-token request: HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "::error::could not mint an id-token for the npm audience"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import base64, json
+          claims = json.load(open("/tmp/oidc.json"))["value"].split(".")[1]
+          claims += "=" * (-len(claims) % 4)
+          c = json.loads(base64.urlsafe_b64decode(claims))
+          print("--- OIDC claims npmjs.com will match against ---")
+          for k in ("iss", "aud", "repository", "workflow_ref", "environment", "ref"):
+              print(f"  {k}: {c.get(k)}")
+          PY
+
+      - name: Probe -- pack without publishing
+        if: inputs.npm_probe
+        run: npm publish --dry-run
+
+      - name: Publish
+        if: ${{ !inputs.npm_probe }}
+        run: npm publish
 
   # Publishes the .deb into a real, signed apt repo hosted on this repo's
   # GitHub Pages (gh-pages branch), so users get `sudo apt install leghorn`
