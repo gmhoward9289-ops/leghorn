@@ -8,15 +8,23 @@
 # homebrew-core is not an option yet -- it requires notability thresholds
 # (stars/forks/watchers) that this project has not met.
 #
+# The url points at the sdist tarball uploaded to the GitHub Release, not
+# GitHub's auto-generated archive/refs/tags/ URL. That URL isn't a release
+# asset at all, so GitHub doesn't count `brew install` downloads in the repo's
+# release download_count the way it does for the .deb/.whl assets -- see
+# roost's history (packaging/roost.rb) for how this was found and fixed there
+# first.
+#
 # After tagging a release, refresh the checksum with:
-#   curl -sL https://github.com/gmhoward9289-ops/leghorn/archive/refs/tags/v0.1.tar.gz | shasum -a 256
+#   curl -sL https://github.com/gmhoward9289-ops/leghorn/releases/download/v0.1/leghorn-0.1.tar.gz | shasum -a 256
 class Leghorn < Formula
   include Language::Python::Shebang
 
   desc "Live dashboard for Claude Code sessions, git state, and GitHub CI"
   homepage "https://github.com/gmhoward9289-ops/leghorn"
-  url "https://github.com/gmhoward9289-ops/leghorn/archive/refs/tags/v0.1.tar.gz"
+  url "https://github.com/gmhoward9289-ops/leghorn/releases/download/v0.1/leghorn-0.1.tar.gz"
   sha256 "PLACEHOLDER_FILLED_BY_RELEASE_WORKFLOW"
+  version "0.1"
   license "MIT"
 
   depends_on "python@3.13"
