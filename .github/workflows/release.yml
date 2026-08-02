@@ -146,20 +146,22 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      # No registry-url here, deliberately. Giving setup-node a registry-url
-      # makes it write an .npmrc containing
+      # registry-url is back, and the reasoning that removed it in 963a831 was
+      # wrong. That commit argued the .npmrc setup-node writes
       #   //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
-      # and nothing in this repo sets NODE_AUTH_TOKEN -- trusted publishing
-      # is the whole point, there is no token. The placeholder expands to an
-      # empty string, npm decides it is already configured for auth, and
-      # never performs the OIDC exchange: it published unauthenticated and
-      # the registry answered 404 (npm reports unauthorized writes to an
-      # existing package as 404, not 401). That is what failed v0.1 and v0.2.
-      # registry.npmjs.org is npm's default anyway, so dropping this loses
-      # nothing. Do not add it back without also setting NODE_AUTH_TOKEN.
+      # expands to an empty token and suppresses the OIDC exchange. Removing
+      # it did change the failure -- 404 became ENEEDAUTH on v0.3, so npm
+      # genuinely stopped sending empty credentials -- but it never reached
+      # the exchange either, which means the .npmrc was not what was blocking
+      # it. npm's own trusted-publishing setup keeps registry-url and simply
+      # sets no NODE_AUTH_TOKEN, so match that.
+      #
+      # Deliberately no NODE_AUTH_TOKEN anywhere: there is no stored token,
+      # that is the entire point of trusted publishing.
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
+          registry-url: "https://registry.npmjs.org"
       # OIDC trusted publishing needs npm >= 11.5.1; node 22 still ships 10.x.
       - run: npm install -g npm@latest
       # Diagnostics: if this job ever fails again, the log should say plainly
@@ -207,9 +209,15 @@ jobs:
               print(f"  {k}: {c.get(k)}")
           PY
 
-      - name: Probe -- pack without publishing
+      # A real publish, not --dry-run. The dry run turned out to be worthless
+      # as a test: it warns "requires you to be logged in (dry-run)" and stops
+      # without attempting the exchange, so it can never distinguish a working
+      # trusted publisher from a broken one. Verbose logging is the point --
+      # it shows whether npm contacts the OIDC endpoint at all, which is the
+      # one thing every failure so far has left ambiguous.
+      - name: Probe -- publish for real, verbosely
         if: inputs.npm_probe
-        run: npm publish --dry-run
+        run: npm publish --loglevel verbose
 
       - name: Publish
         if: ${{ !inputs.npm_probe }}
