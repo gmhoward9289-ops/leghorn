@@ -39,7 +39,7 @@ import threading
 import time
 from pathlib import Path
 
-__version__ = "0.1"
+__version__ = "0.2"
 
 
 def load_data_layer():
