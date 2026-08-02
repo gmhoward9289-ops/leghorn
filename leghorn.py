@@ -200,6 +200,10 @@ class Model:
 
     def stop(self):
         self._stop.set()
+        # Drain the sweep pools too: their worker threads are non-daemon, and
+        # the interpreter joins them at exit -- without this a quit pressed
+        # mid-sweep holds the shell prompt hostage for the rest of the sweep.
+        cb.CANCEL.set()
         self._wake.set()
         self._gh_wake.set()
 
@@ -785,7 +789,25 @@ def clamp_scroll(sel, scroll, visible_rows):
 
 
 def loop(stdscr, model, args):
-    curses.curs_set(0)
+    try:
+        _loop(stdscr, model, args)
+    finally:
+        # curses.wrapper's endwin does NOT undo curs_set(0) everywhere:
+        # PDCurses (windows-curses) sets console cursor visibility directly
+        # and leaves it as-is, so without this the prompt comes back with an
+        # invisible cursor on Windows. Guarded because a quit triggered by a
+        # dying terminal can make curs_set fail too.
+        try:
+            curses.curs_set(1)
+        except curses.error:
+            pass
+
+
+def _loop(stdscr, model, args):
+    try:
+        curses.curs_set(0)
+    except curses.error:
+        pass  # some terminals cannot hide the cursor; run visible
     init_colors()
     stdscr.timeout(250)
 
@@ -1094,6 +1116,13 @@ def main():
         pass
     finally:
         model.stop()
+        # Join briefly so a worker mid-sweep finishes (or drains via CANCEL)
+        # before the terminal is handed back -- a daemon thread that dies
+        # during interpreter teardown prints "Exception ignored" straight onto
+        # the restored shell prompt.
+        worker.join(timeout=5)
+        if args.github:
+            gh_worker.join(timeout=5)
 
 
 if __name__ == "__main__":

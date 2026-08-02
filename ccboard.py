@@ -41,6 +41,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -199,6 +200,13 @@ def tree_path(project, tree):
 
 
 GIT_TIMEOUT = 5
+# Set by the embedding UI on quit. Executor worker threads are non-daemon and
+# the interpreter joins them at exit, so without this a quit pressed mid-sweep
+# waits out every queued git/gh call -- the prompt comes back seconds late.
+# With it, queued work drains as instant no-ops; only the one call already in
+# flight is waited for, bounded by its own subprocess timeout.
+CANCEL = threading.Event()
+
 GIT_WORKERS = 8
 # Field separator for git --format. NUL would be the obvious choice, but it
 # cannot survive argv -- exec rejects an argument with an embedded null byte.
@@ -207,6 +215,8 @@ SEP = "\x1f"
 
 def git(dirpath, *args):
     """Read-only git in dirpath. None if it is not a repo, fails, or hangs."""
+    if CANCEL.is_set():
+        return None
     try:
         out = subprocess.run(
             ("git", "-C", str(dirpath)) + args,
@@ -320,7 +330,10 @@ def commit_feed(limit):
                    "--format=" + SEP.join(("%ct", "%h", "%an", "%D", "%s")))
 
     commits = []
-    with ThreadPoolExecutor(max_workers=GIT_WORKERS) as pool:
+    # Not a with-block: __exit__ waits for every queued task, which on quit is
+    # exactly the wait CANCEL exists to skip.
+    pool = ThreadPoolExecutor(max_workers=GIT_WORKERS)
+    try:
         for repo, raw in zip(repos, pool.map(walk, repos)):
             for line in (raw or "").splitlines():
                 parts = line.split(SEP)
@@ -335,6 +348,8 @@ def commit_feed(limit):
                     "refs": refs.replace("HEAD -> ", "").strip(),
                     "subject": subject,
                 })
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
     commits.sort(key=lambda c: -c["ts"])
     return commits[:limit]
 
@@ -424,6 +439,8 @@ def gh_preflight():
 def gh_json(gh, args, cwd):
     """One gh call parsed as JSON, or None. None, not [] -- a caller merging
     per-repo results must be able to tell 'no PRs' from 'could not ask'."""
+    if CANCEL.is_set():
+        return None
     try:
         out = subprocess.run([gh] + args, cwd=str(cwd), capture_output=True,
                              text=True, timeout=GH_TIMEOUT)
@@ -571,9 +588,13 @@ def github_feed(limit=40):
         return [], ""
 
     events = []
-    with ThreadPoolExecutor(max_workers=GH_WORKERS) as pool:
+    # Same shape as commit_feed: shutdown must not wait for queued tasks.
+    pool = ThreadPoolExecutor(max_workers=GH_WORKERS)
+    try:
         for per_repo in pool.map(lambda r: _repo_events(gh, r), repos):
             events.extend(per_repo or [])
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
     # Live runs first, then red (a failure must not scroll away), then stuck,
     # then everything else by freshness.
