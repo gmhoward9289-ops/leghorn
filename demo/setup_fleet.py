@@ -207,7 +207,10 @@ sys.exit(0)
     else:
         script.write_text("#!/usr/bin/env bash\nexec \"%s\" \"%s\" \"$@\"\n" % (
             sys.executable, py_path))
-        os.chmod(script, 0o755)
+        # 0755: script is a POSIX shell shim other processes exec directly, so
+        # it needs the execute bit; 0644 (the rule's suggested fix) would make
+        # it non-runnable.
+        os.chmod(script, 0o755)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
 
 
 def write_git_roost_fallback():
