@@ -30,10 +30,12 @@ happen is the first step to not doing it. The GitHub pane ranks by what it
 costs to ignore: running first, then red (a failure must not scroll away),
 then stuck-in-queue, then everything else by freshness.
 
-Two files, stdlib only, Python 3.9+. macOS and Linux (curses). Read-only by
-construction: it runs `gh`, read-only git plumbing, and (if present)
-`claudectl`, and never writes to a tree, a registry or a session. Every data
-source is optional — missing pieces degrade to a labelled gap, never an error.
+Two files, stdlib only, Python 3.9+. macOS and Linux need nothing beyond the
+standard library; Windows needs `windows-curses`, which is the only thing
+curses is not already there for. Read-only by construction: it reads session
+transcripts, runs `gh` and read-only git plumbing, and never writes to a tree,
+a registry or a session. Every data source is optional — missing pieces degrade
+to a labelled gap, never an error.
 
 ## Install
 
@@ -74,8 +76,10 @@ and `sudo apt install ./leghorn_<version>_all.deb`.
 - **gh** (authenticated) — for the GITHUB pane. Unauthenticated, the pane says
   "cannot see github" rather than pretending nothing is happening; an empty
   feed and a feed that cannot see are different facts.
-- **claudectl** (optional) — session status and context columns. Without it
-  you still get names, trees, branches and git state.
+Session status, context and burn are read from the JSONL transcripts Claude
+Code already writes under `~/.claude/projects` (override:
+`CLAUDE_PROJECTS_DIR`) — no extra binary, and the same numbers on every
+platform. A session with no transcript yet degrades to a labelled gap.
 
 Clones are discovered under `~/GitHub` (override: `LEGHORN_ROOT`).
 

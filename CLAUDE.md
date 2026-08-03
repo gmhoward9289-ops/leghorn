@@ -2,8 +2,8 @@
 
 Two files, stdlib only, Python 3.9+. `leghorn.py` is the curses renderer;
 `coop.py` is the data layer and a working CLI in its own right. Read-only by
-construction: it shells out to `git`, `gh` and `claudectl` and must never write
-to a tree, a registry or a session. Every data source is optional and degrades
+construction: it reads session transcripts, shells out to `git` and `gh`, and
+must never write to a tree, a registry or a session. Every data source is optional and degrades
 to a labelled gap — "cannot see github" and "nothing is happening" must never
 render identically.
 
