@@ -25,8 +25,8 @@ Stdlib only, on purpose. This runs unattended from shells with a minimal PATH;
 a venv or a pip dependency is one more thing that can be missing at 7am.
 curses is always there (macOS and Linux -- Windows has no stdlib curses).
 
-Read-only, like coop: it runs claudectl, gh, and read-only git plumbing,
-and never writes to a tree, a registry or a session.
+Read-only, like coop: it reads session transcripts, and runs gh and read-only
+git plumbing. It never writes to a tree, a registry or a session.
 """
 
 from __future__ import annotations
@@ -237,10 +237,11 @@ class Model:
             self.busy = True
         rows, commits, warn, error = [], [], None, ""
         try:
-            telemetry, warn = cb.load_claudectl()
+            sessions = cb.load_sessions()
+            telemetry, warn = cb.load_transcripts(sessions)
             claims, occupancy = cb.load_registry()
             rows = sorted(
-                cb.build(telemetry, claims, occupancy, cb.load_sessions(),
+                cb.build(telemetry, claims, occupancy, sessions,
                          use_git=self.use_git),
                 key=cb.sort_key,
             )

@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """coop -- one table for every live Claude Code session: state and intent.
 
-claudectl reads processes, so it knows status, context and burn, but for a label
-it has only the launch cwd -- which is ~/GitHub for nearly every session here, so
-its project column says "GitHub" nineteen times. ccwork knows the opposite half:
-which worktree and branch a session holds and what it claimed it was doing, but
-nothing about whether that session is stuck, idle or eating context.
+Claude Code writes a JSONL transcript per session, and every turn in it carries
+the model and its token usage -- so status, context and burn are all derivable
+without asking a third-party binary for them. What the transcript has no opinion
+on is intent: ccwork's registry knows which worktree and branch a session holds
+and what it claimed it was doing, but nothing about whether that session is
+stuck, idle or eating context.
 
-coop joins them. `~/.claude/sessions/<pid>.json` carries the sessionId, and
-ccwork's registry keys claims and occupancy by that same id, so pid is a clean
-join key across all three sources.
+coop joins them. `~/.claude/sessions/<pid>.json` carries the sessionId, which
+names both the transcript file and the key ccwork's registry uses, so pid is a
+clean join key across all three sources.
 
 A third source is git itself: what each tree has uncommitted and how far it has
 drifted from origin. Sessions report what they mean to do; git reports what they
@@ -23,12 +24,12 @@ have actually done, which is the only one of the two that can be wrong.
     coop --no-git         # skip the git columns if they are ever slow
     coop --json           # joined records, for piping somewhere else
 
-Read-only by construction: it runs `claudectl --json`, reads two state files,
-and gets git facts from `git-roost --json`, which enforces read-only at the
-argument level. It never writes, never claims, never touches a session, and
-never mutates a tree. claudectl is optional -- without it you still get names,
-trees, branches, tasks and git state, just no status or context. git-roost is
-optional too -- without it the git columns drop, as with --no-git.
+Read-only by construction: it reads transcripts and two state files, and gets
+git facts from `git-roost --json`, which enforces read-only at the argument
+level. It never writes, never claims, never touches a session, and never mutates
+a tree. Transcripts are stdlib-only to read, so status and context need no
+external binary and work on every platform. git-roost is optional -- without it
+the git columns drop, as with --no-git.
 
 This is leghorn's data layer first and a command second; leghorn imports it.
 """
@@ -55,36 +56,201 @@ SESSIONS_DIR = Path(os.environ.get("CCWORK_SESSIONS_DIR") or HOME / ".claude" / 
 STATE_DIR = Path(os.environ.get("CCWORK_STATE_DIR") or HOME / "Claude" / "worktrees")
 REGISTRY = STATE_DIR / "registry.json"
 
-# Homebrew is absent from a non-login shell's PATH, which is how hooks and cron
-# invoke things. Look there explicitly rather than failing with "not found".
-CLAUDECTL_FALLBACKS = ("/opt/homebrew/bin/claudectl", "/usr/local/bin/claudectl")
-
 ATTENTION = ("needsinput", "waiting", "error", "failed")
 
 
-def find_claudectl():
-    found = shutil.which("claudectl")
-    if found:
-        return found
-    for path in CLAUDECTL_FALLBACKS:
-        if os.access(path, os.X_OK):
-            return path
-    return None
+# ---------------------------------------------------------------------------
+# Transcript telemetry -- the native replacement for claudectl.
+#
+# claudectl is not a data source, it is a parser: everything it reports is
+# derived from the JSONL transcripts Claude Code already writes to
+# ~/.claude/projects/<mangled-cwd>/<sessionId>.jsonl. Reading them directly
+# removes a third-party binary that ships no Windows build, and drops the
+# estimate layer that produced the impossible context values ctx() has to
+# annotate below.
+#
+# Only the tail of each transcript is read. These files reach several MB and
+# the answer is always near the end; scanning whole files once per refresh
+# would dominate the render loop.
+
+PROJECTS_DIR = Path(os.environ.get("CLAUDE_PROJECTS_DIR") or HOME / ".claude" / "projects")
+
+TAIL_BYTES = 256 * 1024
+
+# Context window per model, longest prefix wins. Sourced from the Anthropic
+# model reference rather than guessed -- a wrong denominator here is exactly
+# the failure mode that made claudectl's percentages untrustworthy.
+CONTEXT_WINDOWS = (
+    ("claude-haiku-4-5", 200_000),
+    ("claude-opus-5", 1_000_000),
+    ("claude-sonnet-5", 1_000_000),
+    ("claude-fable-5", 1_000_000),
+    ("claude-opus-4", 1_000_000),
+    ("claude-sonnet-4", 1_000_000),
+)
+DEFAULT_WINDOW = 200_000
+
+# Tool names whose input carries a path the session wrote to. Reads are excluded
+# on purpose: opening a file says nothing about which project a session is on.
+WRITE_TOOLS = ("Write", "Edit", "NotebookEdit")
+
+# A turn is "live" if the transcript was touched this recently.
+WORKING_SECS = 90
 
 
-def load_claudectl():
-    """pid -> telemetry. Empty dict if claudectl is missing or misbehaving."""
-    exe = find_claudectl()
-    if not exe:
-        return {}, "claudectl not found on PATH"
+def context_window(model):
+    for prefix, size in CONTEXT_WINDOWS:
+        if model and model.startswith(prefix):
+            return size
+    return DEFAULT_WINDOW
+
+
+def transcript_index():
+    """sessionId -> newest transcript path.
+
+    Agent sidecars (agent-*.jsonl) are skipped: they are subagent traces, not
+    sessions, and have no pid to join against.
+    """
+    index = {}
+    if not PROJECTS_DIR.is_dir():
+        return index
+    for path in PROJECTS_DIR.glob("*/*.jsonl"):
+        if path.name.startswith("agent-"):
+            continue
+        sid = path.stem
+        prev = index.get(sid)
+        try:
+            if prev is None or path.stat().st_mtime > prev.stat().st_mtime:
+                index[sid] = path
+        except OSError:
+            continue
+    return index
+
+
+def read_tail(path):
+    """Whole JSON records from the last TAIL_BYTES of a file.
+
+    The first line of the window is dropped unless the window starts at byte 0 --
+    seeking to a fixed offset lands mid-record, and a half line is not JSON.
+    """
     try:
-        out = subprocess.run(
-            [exe, "--json"], capture_output=True, text=True, timeout=20
-        )
-        rows = json.loads(out.stdout or "[]")
-    except (subprocess.TimeoutExpired, ValueError, OSError) as exc:
-        return {}, "claudectl unavailable (%s)" % type(exc).__name__
-    return {r["pid"]: r for r in rows if "pid" in r}, None
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            start = max(0, size - TAIL_BYTES)
+            fh.seek(start)
+            blob = fh.read()
+        lines = blob.decode("utf-8", "replace").splitlines()
+    except OSError:
+        return []
+    if start and lines:
+        lines = lines[1:]
+    records = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except ValueError:
+            continue
+    return records
+
+
+def summarize(records, mtime):
+    """One transcript's records -> the telemetry fields build() consumes."""
+    model = None
+    context_tokens = None
+    burn = 0
+    files = {}
+    last_role = None
+    last_had_tool = False
+
+    for rec in records:
+        kind = rec.get("type")
+        msg = rec.get("message") or {}
+        if kind in ("user", "assistant"):
+            last_role = kind
+        if kind != "assistant":
+            continue
+        last_had_tool = False
+        usage = msg.get("usage") or {}
+        if usage:
+            model = msg.get("model") or model
+            total = 0
+            for field in ("input_tokens", "cache_read_input_tokens",
+                          "cache_creation_input_tokens"):
+                value = usage.get(field)
+                if isinstance(value, int):
+                    total += value
+            # Cache reads dominate and are not cumulative across turns -- the
+            # last turn's total IS the live context size, so take it rather
+            # than summing.
+            if total:
+                context_tokens = total
+            out = usage.get("output_tokens")
+            if isinstance(out, int):
+                burn += out
+        for block in msg.get("content") or ():
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            last_had_tool = True
+            if block.get("name") not in WRITE_TOOLS:
+                continue
+            target = (block.get("input") or {}).get("file_path")
+            if isinstance(target, str) and target:
+                # split_path and the INFRA filter both expect POSIX separators.
+                files[target.replace("\\", "/")] = True
+
+    idle = max(0.0, time.time() - mtime)
+    if idle < WORKING_SECS:
+        status = "working" if (last_role == "user" or last_had_tool) else "needsinput"
+    elif last_role == "assistant" and not last_had_tool:
+        status = "needsinput"
+    else:
+        status = "idle"
+
+    pct = None
+    if context_tokens:
+        pct = 100.0 * context_tokens / context_window(model)
+
+    return {
+        "status": status,
+        "context_pct": pct,
+        "model": model,
+        "burn_tokens": burn,
+        "files_modified": files,
+        # cost_usd stays unset on purpose. claudectl reported an API list-price
+        # equivalent derived from token counts, which is unrelated to a flat
+        # subscription -- a number that reads as money but never was.
+        "cost_usd": None,
+        "active_subagents": 0,
+        "estimate": {"verified": True},
+    }
+
+
+def load_transcripts(sessions):
+    """pid -> telemetry, read from the sessions' own transcripts."""
+    index = transcript_index()
+    telemetry = {}
+    missing = 0
+    for s in sessions:
+        pid, sid = s.get("pid"), s.get("sessionId")
+        path = index.get(sid) if sid else None
+        if not isinstance(pid, int) or path is None:
+            missing += 1
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            missing += 1
+            continue
+        telemetry[pid] = summarize(read_tail(path), mtime)
+    warn = None
+    if missing and not telemetry:
+        warn = "no transcripts found for %d live session(s)" % missing
+    elif missing:
+        warn = "%d session(s) without a transcript" % missing
+    return telemetry, warn
 
 
 def load_registry():
@@ -386,7 +552,8 @@ def fmt_feed(commits, wide, width):
 GH_TIMEOUT = 20
 GH_WORKERS = 6
 GH_RUN_LIMIT = 20   # per repo, before the superseded-red collapse
-# Homebrew again absent from a non-login shell's PATH; see CLAUDECTL_FALLBACKS.
+# Homebrew is absent from a non-login shell's PATH, which is how hooks and cron
+# invoke things. Look there explicitly rather than failing with "not found".
 GH_FALLBACKS = ("/opt/homebrew/bin/gh", "/usr/local/bin/gh")
 
 RED_STATES = ("failure", "timed_out", "startup_failure", "error", "action_required")
@@ -728,8 +895,9 @@ def fmt(rows, wide, width):
         v = r["context_pct"]
         if not isinstance(v, (int, float)):
             return "-"
-        # claudectl emits impossible values (192%) when it falls back to an
-        # unverified model profile. Show it, but never let it read as truth.
+        # The "?" is a tripwire, not decoration: >100% means the model matched
+        # no entry in CONTEXT_WINDOWS and fell through to DEFAULT_WINDOW. Show
+        # the number, but never let a stale window table read as truth.
         return "%.0f%%%s" % (v, "?" if v > 100 else "")
 
     def sub(r):
@@ -819,10 +987,11 @@ def render(args, width):
             return [json.dumps(commits, indent=2)]
         return fmt_feed(commits, args.wide, width)
 
-    telemetry, warn = load_claudectl()
+    sessions = load_sessions()
+    telemetry, warn = load_transcripts(sessions)
     claims, occupancy = load_registry()
     rows = sorted(
-        build(telemetry, claims, occupancy, load_sessions(), use_git=not args.no_git),
+        build(telemetry, claims, occupancy, sessions, use_git=not args.no_git),
         key=sort_key,
     )
     if args.json:
@@ -835,7 +1004,7 @@ def render(args, width):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Live Claude Code sessions: claudectl telemetry joined to "
+        description="Live Claude Code sessions: transcript telemetry joined to "
                     "ccwork intent and real git state.")
     ap.add_argument("-w", "--watch", nargs="?", const=3.0, type=float, metavar="SECS",
                     help="redraw every SECS seconds (default 3)")
