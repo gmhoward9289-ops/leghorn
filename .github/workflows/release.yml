@@ -14,6 +14,10 @@ on:
         description: Run the apt-repo job even without a tag (re-publish the current version, without touching PyPI or npm)
         type: boolean
         default: false
+      npm_probe:
+        description: Run only the npm job in probe mode -- diagnostics, an OIDC claim dump and a dry run. Publishes nothing.
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -69,8 +73,8 @@ jobs:
           python -m venv /tmp/v
           /tmp/v/bin/pip install --quiet dist/*.whl
           /tmp/v/bin/leghorn --version
-          /tmp/v/bin/python -c "import leghorn, ccboard"
-          /tmp/v/bin/python -m ccboard --json > /dev/null
+          /tmp/v/bin/python -c "import leghorn, coop"
+          /tmp/v/bin/python -m coop --json > /dev/null
           test -f /tmp/v/share/man/man1/leghorn.1
 
       - name: Verify the .deb installs and the man page is readable
@@ -133,7 +137,7 @@ jobs:
   # release.yml, environment "npm" (create that GitHub Environment here too).
   # Until that's registered, this job fails alone; PyPI and apt still publish.
   npm:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.npm_probe
     needs: build
     runs-on: ubuntu-latest
     environment: npm
@@ -142,12 +146,74 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+      # No registry-url here, deliberately. Giving setup-node a registry-url
+      # makes it write an .npmrc containing
+      #   //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+      # and nothing in this repo sets NODE_AUTH_TOKEN -- trusted publishing
+      # is the whole point, there is no token. The placeholder expands to an
+      # empty string, npm decides it is already configured for auth, and
+      # never performs the OIDC exchange: it published unauthenticated and
+      # the registry answered 404 (npm reports unauthorized writes to an
+      # existing package as 404, not 401). That is what failed v0.1 and v0.2.
+      # registry.npmjs.org is npm's default anyway, so dropping this loses
+      # nothing. Do not add it back without also setting NODE_AUTH_TOKEN.
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
+      # OIDC trusted publishing needs npm >= 11.5.1; node 22 still ships 10.x.
       - run: npm install -g npm@latest
-      - run: npm publish
+      # Diagnostics: if this job ever fails again, the log should say plainly
+      # which npm ran and whether an auth line was planted, instead of leaving
+      # it to be inferred from the absence of OIDC output.
+      - name: Publish environment
+        run: |
+          echo "npm version: $(npm --version)"
+          echo "userconfig: ${NPM_CONFIG_USERCONFIG:-<unset>}"
+          if [ -n "${NPM_CONFIG_USERCONFIG:-}" ] && [ -f "$NPM_CONFIG_USERCONFIG" ]; then
+            echo "--- .npmrc (values masked) ---"
+            sed 's/=.*/=<redacted>/' "$NPM_CONFIG_USERCONFIG"
+          else
+            echo "no userconfig .npmrc present (expected: OIDC path is clear)"
+          fi
+
+      # Probe only. Mints the same GitHub OIDC token npm would request and
+      # prints its claims -- never the token itself. Those claims are exactly
+      # what npmjs.com matches a Trusted Publisher against, so a mismatch
+      # between repository/workflow_ref/environment here and what is
+      # registered on the package is the whole failure, visible before a
+      # release depends on it.
+      - name: Probe -- mint an OIDC token and show its claims
+        if: inputs.npm_probe
+        run: |
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::ACTIONS_ID_TOKEN_REQUEST_URL is unset -- id-token: write is not in effect"
+            exit 1
+          fi
+          code=$(curl -sS -o /tmp/oidc.json -w '%{http_code}' \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org")
+          echo "id-token request: HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "::error::could not mint an id-token for the npm audience"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import base64, json
+          claims = json.load(open("/tmp/oidc.json"))["value"].split(".")[1]
+          claims += "=" * (-len(claims) % 4)
+          c = json.loads(base64.urlsafe_b64decode(claims))
+          print("--- OIDC claims npmjs.com will match against ---")
+          for k in ("iss", "aud", "repository", "workflow_ref", "environment", "ref"):
+              print(f"  {k}: {c.get(k)}")
+          PY
+
+      - name: Probe -- pack without publishing
+        if: inputs.npm_probe
+        run: npm publish --dry-run
+
+      - name: Publish
+        if: ${{ !inputs.npm_probe }}
+        run: npm publish
 
   # Publishes the .deb into a real, signed apt repo hosted on this repo's
   # GitHub Pages (gh-pages branch), so users get `sudo apt install leghorn`

@@ -40,13 +40,13 @@ leghorn = "leghorn:main"
 [tool.hatch.version]
 path = "leghorn.py"
 
-# ccboard.py is the data layer leghorn imports; the two ship together in every
+# coop.py is the data layer leghorn imports; the two ship together in every
 # channel (wheel, deb, brew libexec, npm) because leghorn is only a renderer.
 [tool.hatch.build.targets.wheel]
-only-include = ["leghorn.py", "ccboard.py"]
+only-include = ["leghorn.py", "coop.py"]
 
 [tool.hatch.build.targets.wheel.shared-data]
 "leghorn.1" = "share/man/man1/leghorn.1"
 
 [tool.hatch.build.targets.sdist]
-include = ["leghorn.py", "ccboard.py", "leghorn.1", "README.md", "LICENSE", "tests/", "packaging/"]
+include = ["leghorn.py", "coop.py", "leghorn.1", "README.md", "LICENSE", "tests/", "packaging/"]
