@@ -18,14 +18,14 @@ worktree and real git state (SESSIONS), CI runs and open PRs across every
 GitHub clone with failures pinned until they go green (GITHUB), and a commit
 feed across every repo and branch, newest first (COMMITS).
 .PP
-Read-only by construction: it runs
-.BR claudectl ,
-.BR gh ,
+Read-only by construction: it reads the JSONL session transcripts written by
+Claude Code, runs
+.BR gh
 and read-only git plumbing, and never writes to a tree, a registry or a
 session. Every data source is optional and degrades to a labelled gap rather
-than an error \- no claudectl means no status column, no gh authentication
-means the GitHub pane says it cannot see instead of pretending nothing is
-happening.
+than an error \- a session with no transcript yet shows no status or context,
+and no gh authentication means the GitHub pane says it cannot see instead of
+pretending nothing is happening.
 .SH OPTIONS
 .TP
 .BR \-i ", " \-\-interval " " \fISECS\fR

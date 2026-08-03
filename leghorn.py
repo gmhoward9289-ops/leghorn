@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """leghorn -- full-screen live view of every Claude Code session and its git state.
 
-ccboard answers "what is the state right now" in one table, which is the right
+coop answers "what is the state right now" in one table, which is the right
 shape for a hook, a pipe or a glance. This is the other thing: a window you leave
 open on a second monitor while a dozen sessions work, where the eye catches a
 change without reading. Same facts, different job -- so the data layer is
-imported from ccboard rather than reimplemented, and this file is only ever a
+imported from coop rather than reimplemented, and this file is only ever a
 renderer.
 
     leghorn                  # three panes, refreshing every 5s
@@ -25,8 +25,8 @@ Stdlib only, on purpose. This runs unattended from shells with a minimal PATH;
 a venv or a pip dependency is one more thing that can be missing at 7am.
 curses is always there (macOS and Linux -- Windows has no stdlib curses).
 
-Read-only, like ccboard: it runs claudectl, gh, and read-only git plumbing,
-and never writes to a tree, a registry or a session.
+Read-only, like coop: it reads session transcripts, and runs gh and read-only
+git plumbing. It never writes to a tree, a registry or a session.
 """
 
 from __future__ import annotations
@@ -43,24 +43,24 @@ __version__ = "0.3"
 
 
 def load_data_layer():
-    """Import ccboard, wherever this install put it.
+    """Import coop, wherever this install put it.
 
-    Three layouts exist. A checkout or a deb/brew libexec keeps ccboard.py
+    Three layouts exist. A checkout or a deb/brew libexec keeps coop.py
     beside this file; a bin directory may keep it extensionless beside a
     symlink (resolve() follows the link first); a pip/pipx install puts both
     on sys.path as ordinary modules. Sibling file first: when both exist, the
     one next to this file is the one this file was shipped with.
     """
     here = Path(__file__).resolve().parent
-    for candidate in (here / "ccboard.py", here / "ccboard"):
+    for candidate in (here / "coop.py", here / "coop"):
         if candidate.is_file():
-            loader = importlib.machinery.SourceFileLoader("ccboard", str(candidate))
-            spec = importlib.util.spec_from_loader("ccboard", loader)
+            loader = importlib.machinery.SourceFileLoader("coop", str(candidate))
+            spec = importlib.util.spec_from_loader("coop", loader)
             module = importlib.util.module_from_spec(spec)
             loader.exec_module(module)
             return module
-    import ccboard
-    return ccboard
+    import coop
+    return coop
 
 
 cb = load_data_layer()
@@ -147,7 +147,7 @@ def cp(pair):
 
 
 class Model:
-    """Polls ccboard's data layer on a worker thread; the UI only ever reads.
+    """Polls coop's data layer on a worker thread; the UI only ever reads.
 
     GitHub gets its own thread and its own, much slower clock: a gh sweep costs
     ~3s of network across the fleet, and the 5s session/git loop must never
@@ -200,6 +200,10 @@ class Model:
 
     def stop(self):
         self._stop.set()
+        # Drain the sweep pools too: their worker threads are non-daemon, and
+        # the interpreter joins them at exit -- without this a quit pressed
+        # mid-sweep holds the shell prompt hostage for the rest of the sweep.
+        cb.CANCEL.set()
         self._wake.set()
         self._gh_wake.set()
 
@@ -233,10 +237,11 @@ class Model:
             self.busy = True
         rows, commits, warn, error = [], [], None, ""
         try:
-            telemetry, warn = cb.load_claudectl()
+            sessions = cb.load_sessions()
+            telemetry, warn = cb.load_transcripts(sessions)
             claims, occupancy = cb.load_registry()
             rows = sorted(
-                cb.build(telemetry, claims, occupancy, cb.load_sessions(),
+                cb.build(telemetry, claims, occupancy, sessions,
                          use_git=self.use_git),
                 key=cb.sort_key,
             )
@@ -785,7 +790,25 @@ def clamp_scroll(sel, scroll, visible_rows):
 
 
 def loop(stdscr, model, args):
-    curses.curs_set(0)
+    try:
+        _loop(stdscr, model, args)
+    finally:
+        # curses.wrapper's endwin does NOT undo curs_set(0) everywhere:
+        # PDCurses (windows-curses) sets console cursor visibility directly
+        # and leaves it as-is, so without this the prompt comes back with an
+        # invisible cursor on Windows. Guarded because a quit triggered by a
+        # dying terminal can make curs_set fail too.
+        try:
+            curses.curs_set(1)
+        except curses.error:
+            pass
+
+
+def _loop(stdscr, model, args):
+    try:
+        curses.curs_set(0)
+    except curses.error:
+        pass  # some terminals cannot hide the cursor; run visible
     init_colors()
     stdscr.timeout(250)
 
@@ -1094,6 +1117,13 @@ def main():
         pass
     finally:
         model.stop()
+        # Join briefly so a worker mid-sweep finishes (or drains via CANCEL)
+        # before the terminal is handed back -- a daemon thread that dies
+        # during interpreter teardown prints "Exception ignored" straight onto
+        # the restored shell prompt.
+        worker.join(timeout=5)
+        if args.github:
+            gh_worker.join(timeout=5)
 
 
 if __name__ == "__main__":

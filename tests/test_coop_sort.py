@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for ccboard.sort_key.
+"""Tests for coop.sort_key.
 
 The attention sort compares status against ATTENTION, whose entries are
 space-stripped ("needsinput"); live statuses arrive as "Needs Input". Before
@@ -14,11 +14,11 @@ import importlib.util
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent.parent / "ccboard.py"
+SCRIPT = Path(__file__).resolve().parent.parent / "coop.py"
 
 
 def load():
-    loader = importlib.machinery.SourceFileLoader("ccboard_sort_under_test", str(SCRIPT))
+    loader = importlib.machinery.SourceFileLoader("coop_sort_under_test", str(SCRIPT))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)

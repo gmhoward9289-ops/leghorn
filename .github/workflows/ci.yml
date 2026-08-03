@@ -28,15 +28,15 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Smoke test the CLIs
         # Everything here must work on a box with no Claude Code, no sessions
-        # and no gh auth -- degradation is the contract under test. ccboard
+        # and no gh auth -- degradation is the contract under test. coop
         # renders its table headless; leghorn itself is curses and can only be
         # asked for --version and --help without a tty.
         run: |
           python leghorn.py --version
           python leghorn.py --help
-          python ccboard.py --json
-          python ccboard.py --github || true
-          python ccboard.py --github --json | python -c "import json,sys; d=json.load(sys.stdin); assert set(d) == {'events','warn'}, d"
+          python coop.py --json
+          python coop.py --github || true
+          python coop.py --github --json | python -c "import json,sys; d=json.load(sys.stdin); assert set(d) == {'events','warn'}, d"
 
   packaging:
     runs-on: ubuntu-latest
