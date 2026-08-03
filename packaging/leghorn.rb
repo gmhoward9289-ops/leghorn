@@ -9,13 +9,13 @@
 # (stars/forks/watchers) that this project has not met.
 #
 # After tagging a release, refresh the checksum with:
-#   curl -sL https://github.com/gmhoward9289-ops/leghorn/archive/refs/tags/v0.2.tar.gz | shasum -a 256
+#   curl -sL https://github.com/gmhoward9289-ops/leghorn/archive/refs/tags/v0.3.tar.gz | shasum -a 256
 class Leghorn < Formula
   include Language::Python::Shebang
 
   desc "Live dashboard for Claude Code sessions, git state, and GitHub CI"
   homepage "https://github.com/gmhoward9289-ops/leghorn"
-  url "https://github.com/gmhoward9289-ops/leghorn/archive/refs/tags/v0.2.tar.gz"
+  url "https://github.com/gmhoward9289-ops/leghorn/archive/refs/tags/v0.3.tar.gz"
   sha256 "PLACEHOLDER_FILLED_BY_RELEASE_WORKFLOW"
   license "MIT"
 
@@ -25,7 +25,7 @@ class Leghorn < Formula
     # The renderer resolves its data layer as a sibling of its own resolved
     # path, so both files live in libexec and bin carries only a symlink --
     # bin/leghorn -> libexec/leghorn.py, resolve() follows it home.
-    libexec.install "leghorn.py", "ccboard.py"
+    libexec.install "leghorn.py", "coop.py"
     # The shipped shebang is `/usr/bin/env python3`, which would resolve to
     # whatever python happens to be first on PATH -- including a virtualenv the
     # user activated for something else. Pin it to the formula's interpreter.

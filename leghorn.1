@@ -1,9 +1,10 @@
-.TH LEGHORN 1 "August 2026" "leghorn 0.2" "User Commands"
+.TH LEGHORN 1 "August 2026" "leghorn 0.3" "User Commands"
 .SH NAME
 leghorn \- live dashboard for Claude Code sessions, git state, and GitHub CI
 .SH SYNOPSIS
 .B leghorn
 [\fB\-i\fR \fISECS\fR]
+[\fB\-\-speed\fR \fIPACE\fR]
 [\fB\-\-no\-git\fR]
 [\fB\-\-no\-commits\fR]
 [\fB\-\-no\-github\fR]
@@ -17,30 +18,39 @@ worktree and real git state (SESSIONS), CI runs and open PRs across every
 GitHub clone with failures pinned until they go green (GITHUB), and a commit
 feed across every repo and branch, newest first (COMMITS).
 .PP
-Read-only by construction: it runs
-.BR claudectl ,
-.BR gh ,
+Read-only by construction: it reads the JSONL session transcripts written by
+Claude Code, runs
+.BR gh
 and read-only git plumbing, and never writes to a tree, a registry or a
 session. Every data source is optional and degrades to a labelled gap rather
-than an error \- no claudectl means no status column, no gh authentication
-means the GitHub pane says it cannot see instead of pretending nothing is
-happening.
+than an error \- a session with no transcript yet shows no status or context,
+and no gh authentication means the GitHub pane says it cannot see instead of
+pretending nothing is happening.
 .SH OPTIONS
 .TP
 .BR \-i ", " \-\-interval " " \fISECS\fR
-Seconds between session/git refreshes (default 5).
+Seconds between session/git refreshes. Overrides \fB\-\-speed\fR.
+.TP
+.BR \-\-speed " " \fIPACE\fR
+Refresh pace, one of \fBultra\fR (1s sessions / 60s gh), \fBfast\fR (5s / 75s,
+the default), \fBnormal\fR (8s / 2m) or \fBslow\fR (5m / 6h). Cycle it at
+runtime with \fBp\fR. The gh floor stays at a minute even on ultra: a sweep
+costs seconds of network across the fleet against a rate-limited API, so a
+shorter period buys overlapping sweeps rather than fresher data.
 .TP
 .B \-\-no\-git
 Skip the per-tree git probes.
 .TP
 .B \-\-no\-commits
-Hide the commit pane.
+Hide the commit pane; SESSIONS and GITHUB then sit side by side as two
+columns. Toggle at runtime with \fBc\fR.
 .TP
 .B \-\-no\-github
 Hide the GitHub pane; no gh calls are made at all.
 .TP
 .BR \-\-github\-interval " " \fISECS\fR
-Seconds between gh sweeps (default 75). The session loop never waits on it.
+Seconds between gh sweeps. Overrides \fB\-\-speed\fR. The session loop never
+waits on it.
 .TP
 .BR \-\-commits\-width " " \fICOLS\fR
 Fix the commit pane width instead of scaling it.
@@ -57,6 +67,12 @@ refresh everything now, including the gh sweep
 .TP
 .B s / f
 cycle sort / filter
+.TP
+.B p
+cycle refresh speed: ultra, fast, normal, slow
+.TP
+.B c
+toggle the commit feed; off puts sessions and github side by side
 .TP
 .B g
 toggle the per-tree git probes

@@ -7,6 +7,12 @@ Claude Code sessions work: every live session joined to its worktree and
 **real git state**, your **GitHub CI and open PRs** with failures pinned until
 they go green, and a commit feed across every repo, newest first.
 
+![leghorn watching a fleet: contested sessions, red CI, a session detail overlay, and the git toggle](demo/leghorn-demo.gif)
+
+The short ambient loop below is the same program, idling:
+
+![leghorn's ambient loop, sessions ticking quietly](demo/leghorn-loop.gif)
+
 ```
  leghorn  20 sessions · 2 shared · 1 uncommitted · 3 ci red        sort:attention  filter:all  15:26:53
 ╭─ SESSIONS ───────────────────────────────────────────────╮ ╭─ COMMITS ──────────────────────────╮
@@ -30,10 +36,12 @@ happen is the first step to not doing it. The GitHub pane ranks by what it
 costs to ignore: running first, then red (a failure must not scroll away),
 then stuck-in-queue, then everything else by freshness.
 
-Two files, stdlib only, Python 3.9+. macOS and Linux (curses). Read-only by
-construction: it runs `gh`, read-only git plumbing, and (if present)
-`claudectl`, and never writes to a tree, a registry or a session. Every data
-source is optional — missing pieces degrade to a labelled gap, never an error.
+Two files, stdlib only, Python 3.9+. macOS and Linux need nothing beyond the
+standard library; Windows needs `windows-curses`, which is the only thing
+curses is not already there for. Read-only by construction: it reads session
+transcripts, runs `gh` and read-only git plumbing, and never writes to a tree,
+a registry or a session. Every data source is optional — missing pieces degrade
+to a labelled gap, never an error.
 
 ## Install
 
@@ -74,8 +82,10 @@ and `sudo apt install ./leghorn_<version>_all.deb`.
 - **gh** (authenticated) — for the GITHUB pane. Unauthenticated, the pane says
   "cannot see github" rather than pretending nothing is happening; an empty
   feed and a feed that cannot see are different facts.
-- **claudectl** (optional) — session status and context columns. Without it
-  you still get names, trees, branches and git state.
+Session status, context and burn are read from the JSONL transcripts Claude
+Code already writes under `~/.claude/projects` (override:
+`CLAUDE_PROJECTS_DIR`) — no extra binary, and the same numbers on every
+platform. A session with no transcript yet degrades to a labelled gap.
 
 Clones are discovered under `~/GitHub` (override: `LEGHORN_ROOT`).
 
@@ -84,22 +94,23 @@ Clones are discovered under `~/GitHub` (override: `LEGHORN_ROOT`).
 ```bash
 leghorn                  # three panes, refreshing every 5s
 leghorn -i 2             # ...every 2s
+leghorn --speed slow     # 5m session refresh, 6h gh sweep (also: ultra, fast, normal)
 leghorn --no-github      # hide the GitHub pane (no gh calls at all)
-leghorn --no-commits     # hide the commit feed
+leghorn --no-commits     # hide the commit feed; sessions and github go side by side
 leghorn --github-interval 120   # slower gh sweeps
 ```
 
 Keys: `q` quit · `r` refresh (including a gh sweep) · `s`/`f` cycle
-sort/filter · `tab` cycle panes · `j`/`k` move · `enter` detail ·
-`?` help — which explains what each screen and symbol *means*, not just the
+sort/filter · `p` cycle speed · `c` toggle commits · `tab` cycle panes ·
+`j`/`k` move · `enter` detail · `?` help — which explains what each screen and symbol *means*, not just the
 keys.
 
 The data layer is also a command of its own:
 
 ```bash
-python3 -m ccboard            # one table of sessions, for a hook or a pipe
-python3 -m ccboard --github   # the CI/PR feed as plain text
-python3 -m ccboard --json     # records, for piping somewhere else
+python3 -m coop            # one table of sessions, for a hook or a pipe
+python3 -m coop --github   # the CI/PR feed as plain text
+python3 -m coop --json     # records, for piping somewhere else
 ```
 
 ## Name
