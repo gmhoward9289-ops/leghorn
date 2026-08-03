@@ -38,7 +38,11 @@ class Leghorn < Formula
     # whatever python happens to be first on PATH -- including a virtualenv the
     # user activated for something else. Pin it to the formula's interpreter.
     rewrite_shebang detected_python_shebang(use_python_from_path: false), libexec/"leghorn.py"
-    chmod 0755, libexec/"leghorn.py"
+    # 0755 is required, not incidental: this is the installed entry point a
+    # symlink in bin/ points at, so it needs the execute bit for every user on
+    # the machine. 0644 (the rule's suggested fix) would make `leghorn` non-
+    # executable immediately after `brew install`.
+    chmod 0755, libexec/"leghorn.py" # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
     bin.install_symlink libexec/"leghorn.py" => "leghorn"
     man1.install "leghorn.1"
   end
