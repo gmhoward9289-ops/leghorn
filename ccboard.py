@@ -28,7 +28,8 @@ and gets git facts from `git-roost --json`, which enforces read-only at the
 argument level. It never writes, never claims, never touches a session, and
 never mutates a tree. claudectl is optional -- without it you still get names,
 trees, branches, tasks and git state, just no status or context. git-roost is
-optional too -- without it the git columns drop, as with --no-git.
+optional too -- without it the git columns render as dashes rather than
+erroring. --no-git is the only thing that actually drops the columns.
 
 This is leghorn's data layer first and a command second; leghorn imports it.
 """
