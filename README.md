@@ -30,7 +30,8 @@ happen is the first step to not doing it. The GitHub pane ranks by what it
 costs to ignore: running first, then red (a failure must not scroll away),
 then stuck-in-queue, then everything else by freshness.
 
-Two files, stdlib only, Python 3.9+. macOS and Linux (curses). Read-only by
+Two files, stdlib only, Python 3.9+. macOS and Linux need nothing beyond the
+standard library. Windows needs `windows-curses` via pip. Read-only by
 construction: it runs `gh`, read-only git plumbing, and (if present)
 `claudectl`, and never writes to a tree, a registry or a session. Every data
 source is optional — missing pieces degrade to a labelled gap, never an error.
@@ -43,13 +44,19 @@ Homebrew (macOS and Linux):
 brew install gmhoward9289-ops/tap/leghorn
 ```
 
-npm:
+npm (macOS and Linux):
 
 ```bash
 npm install -g leghorn
 ```
 
-pipx / pip:
+winget (Windows):
+
+```bash
+winget install gmhoward9289-ops.leghorn
+```
+
+pipx / pip (all platforms):
 
 ```bash
 pipx install leghorn
@@ -79,20 +86,44 @@ and `sudo apt install ./leghorn_<version>_all.deb`.
 
 Clones are discovered under `~/GitHub` (override: `LEGHORN_ROOT`).
 
+## Platform support
+
+| Platform | Install method | Dependencies |
+|----------|-----------------|--------------|
+| macOS    | Homebrew, npm, pipx/pip | None beyond Python 3.9+ |
+| Linux    | apt (Debian/Ubuntu), npm, pipx/pip | None beyond Python 3.9+ |
+| Windows  | winget, pipx/pip | `windows-curses` (auto-installed via pip) |
+
+npm is excluded from Windows because it has no way to deliver the `windows-curses` pip dependency; Windows users should use winget or pip instead.
+
+## Repository structure
+
+- **`bin/leghorn.js`** — Node.js entry point (finds Python, runs leghorn.py)
+- **`leghorn.py`** — main TUI renderer; uses curses/windows-curses for display
+- **`ccboard.py`** — data layer: reads sessions, git, GitHub via `gh` and `claudectl`
+- **`leghorn.1`** — man page
+- **`pyproject.toml`** — Python build config; declares `windows-curses` conditional dependency
+- **`package.json`** — npm metadata; `os` field excludes Windows
+- **`packaging/`** — release artifacts: Debian (deb), Homebrew (rb), Windows exe builder
+- **`.github/workflows/`** — CI matrix (macOS, Linux, Windows), release channels (npm, PyPI, winget, Homebrew, apt)
+- **`tests/`** — pytest suite; includes Windows-specific tests
+
 ## Usage
 
 ```bash
-leghorn                  # three panes, refreshing every 5s
-leghorn -i 2             # ...every 2s
-leghorn --no-github      # hide the GitHub pane (no gh calls at all)
-leghorn --no-commits     # hide the commit feed
-leghorn --github-interval 120   # slower gh sweeps
+leghorn                          # three panes, refreshing every 5s (fast mode)
+leghorn -i 2                     # ...every 2s
+leghorn --speed slow             # 5m sessions / 6h gh (also: ultra, fast, normal)
+leghorn --no-git                 # skip per-tree git probes
+leghorn --no-commits             # hide the commit feed
+leghorn --no-github              # hide the GitHub pane (no gh calls at all)
+leghorn --github-interval 120    # slower gh sweeps
+leghorn --commits-width 60       # fixed commit pane width
 ```
 
-Keys: `q` quit · `r` refresh (including a gh sweep) · `s`/`f` cycle
-sort/filter · `tab` cycle panes · `j`/`k` move · `enter` detail ·
-`?` help — which explains what each screen and symbol *means*, not just the
-keys.
+Keys: `q` quit · `r` refresh now · `s`/`f` cycle sort/filter · `p` cycle speed ·
+`c` toggle commits · `g` toggle git probes · `tab` cycle panes · `j`/`k` move ·
+`enter` detail · `?` help (explains what each symbol and screen means).
 
 The data layer is also a command of its own:
 
