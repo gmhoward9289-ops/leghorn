@@ -34,16 +34,24 @@ report() { # <artifact> <found> <want>
 man_version=$(sed -n '1s/.*"leghorn \([^"]*\)".*/\1/p' leghorn.1)
 report "leghorn.1 .TH header" "$man_version" "$VERSION"
 
-# --- Homebrew formula: the tag in the source URL ------------------------------
-# This is the value Homebrew turns into `version`, so it is the one that
-# decides what `brew install` actually fetches.
-rb_version=$(sed -n 's#.*url "https://github.com/[^"]*/archive/refs/tags/v\([^"]*\)\.tar\.gz".*#\1#p' \
+# --- Homebrew formula: the tag and filename in the source URL -----------------
+# The formula also carries an explicit `version`, since a releases/download/
+# URL doesn't let Homebrew infer it reliably the way the old archive/refs/tags/
+# URL did -- that explicit line is what `brew install` actually reads.
+rb_url_tag=$(sed -n 's#.*url "https://github.com/[^"]*/releases/download/v\([^/]*\)/.*".*#\1#p' \
              packaging/leghorn.rb)
-report "leghorn.rb url tag" "$rb_version" "$VERSION"
+report "leghorn.rb url tag" "$rb_url_tag" "$VERSION"
+
+rb_url_file=$(sed -n 's#.*url ".*/leghorn-\([^"]*\)\.tar\.gz".*#\1#p' \
+              packaging/leghorn.rb)
+report "leghorn.rb url filename" "$rb_url_file" "$VERSION"
+
+rb_version=$(sed -n 's/^\s*version "\([^"]*\)".*/\1/p' packaging/leghorn.rb)
+report "leghorn.rb version" "$rb_version" "$VERSION"
 
 # The refresh-checksum comment above it should point at the same tag, or the
 # next person recomputes the wrong tarball's hash and "fixes" it wrongly.
-rb_hint=$(sed -n 's#.*curl -sL https://github.com/[^ ]*/archive/refs/tags/v\([0-9][^ ]*\)\.tar\.gz.*#\1#p' \
+rb_hint=$(sed -n 's#.*curl -sL https://github.com/[^ ]*/releases/download/v\([0-9][^/]*\)/.*\.tar\.gz.*#\1#p' \
           packaging/leghorn.rb | head -1)
 report "leghorn.rb curl comment" "$rb_hint" "$VERSION"
 
@@ -79,13 +87,14 @@ Version drift. Every artifact above must say $VERSION.
 
   leghorn.1            .TH LEGHORN 1 "<date>" "leghorn $VERSION" "User Commands"
   package.json         "version": "$NPM_WANT"   (npm needs three components)
-  packaging/leghorn.rb url ...archive/refs/tags/v$VERSION.tar.gz
+  packaging/leghorn.rb url     ...releases/download/v$VERSION/leghorn-$VERSION.tar.gz
+                       version "$VERSION"
                        and refresh sha256:
-                         curl -sL https://github.com/gmhoward9289-ops/leghorn/archive/refs/tags/v$VERSION.tar.gz | shasum -a 256
+                         curl -sL https://github.com/gmhoward9289-ops/leghorn/releases/download/v$VERSION/leghorn-$VERSION.tar.gz | shasum -a 256
 
-A stale formula does not fail loudly: Homebrew derives \`version\` from the
-URL, so its built-in version assertion checks the wrong number against a
-tarball that agrees with it, and passes.
+A stale formula does not fail loudly: with an explicit \`version\` line,
+Homebrew's built-in version assertion checks that stale number against a
+tarball that still agrees with it, and passes.
 EOF
   exit 1
 fi
