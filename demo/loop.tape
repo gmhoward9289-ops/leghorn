@@ -7,7 +7,7 @@ Set Height 640
 Set Padding 14
 
 Hide
-Type "cd /Users/george/GitHub/leghorn && export HOME=/tmp/leghorn-demo-home PATH=/tmp/leghorn-demo-home/bin:$PATH && clear"
+Type "cd .. && export HOME=/tmp/leghorn-demo-home PATH=/tmp/leghorn-demo-home/bin:$PATH && clear"
 Enter
 Sleep 500ms
 Show
