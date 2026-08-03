@@ -7,6 +7,12 @@ Claude Code sessions work: every live session joined to its worktree and
 **real git state**, your **GitHub CI and open PRs** with failures pinned until
 they go green, and a commit feed across every repo, newest first.
 
+![leghorn watching a fleet: contested sessions, red CI, a session detail overlay, and the git toggle](demo/leghorn-demo.gif)
+
+The short ambient loop below is the same program, idling:
+
+![leghorn's ambient loop, sessions ticking quietly](demo/leghorn-loop.gif)
+
 ```
  leghorn  20 sessions · 2 shared · 1 uncommitted · 3 ci red        sort:attention  filter:all  15:26:53
 ╭─ SESSIONS ───────────────────────────────────────────────╮ ╭─ COMMITS ──────────────────────────╮
