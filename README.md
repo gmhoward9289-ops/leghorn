@@ -111,9 +111,8 @@ npm is excluded from Windows because it has no way to deliver the `windows-curse
 ## Usage
 
 ```bash
-leghorn                          # three panes, refreshing every 5s (fast mode)
+leghorn                          # three panes, refreshing every 5s
 leghorn -i 2                     # ...every 2s
-leghorn --speed slow             # 5m sessions / 6h gh (also: ultra, fast, normal)
 leghorn --no-git                 # skip per-tree git probes
 leghorn --no-commits             # hide the commit feed
 leghorn --no-github              # hide the GitHub pane (no gh calls at all)
@@ -121,7 +120,7 @@ leghorn --github-interval 120    # slower gh sweeps
 leghorn --commits-width 60       # fixed commit pane width
 ```
 
-Keys: `q` quit · `r` refresh now · `s`/`f` cycle sort/filter · `p` cycle speed ·
+Keys: `q` quit · `r` refresh now · `s`/`f` cycle sort/filter ·
 `c` toggle commits · `g` toggle git probes · `tab` cycle panes · `j`/`k` move ·
 `enter` detail · `?` help (explains what each symbol and screen means).
 

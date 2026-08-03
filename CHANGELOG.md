@@ -8,9 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Speed presets: `--speed` flag cycles refresh pace (ultra/fast/normal/slow) with `p` key at runtime
 - Runtime commits toggle: `c` key hides/shows the commit feed; sessions and GitHub pane sit side by side when hidden
-- Man page now documents all flags and keys, including `--speed`, `p`, and `c`
+- Man page now documents all flags and keys, including `c`
 - README platform support table clarifying macOS/Linux/Windows installation paths
 - README repository structure section mapping files and directories
 - CHANGELOG documenting versions and changes
@@ -21,11 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Package version bumped to 0.3.0
 - README rewritten to clarify Windows support: "macOS and Linux need nothing beyond the standard library. Windows needs `windows-curses` via pip."
 - Install section now labels platforms: npm (macOS/Linux), winget (Windows), pipx/pip (all platforms)
-- Man page options section expanded to document `--speed` with descriptions of each pace and its refresh intervals
-- Man page keys section expanded to document `p` (cycle speed) and `c` (toggle commits)
+- Man page keys section expanded to document `c` (toggle commits)
 
 ### Fixed
-- UI guard for hidden commits pane; `p` no longer sweeps GitHub when commits are toggled off
 - Sort order normalization so sessions blocked on attention float correctly
 - Filter and sort feedback is now instant when changed from the UI
 - Detail overlay now works on commits pane
