@@ -700,7 +700,10 @@ def sort_key(r):
     ctx = r["context_pct"] if isinstance(r["context_pct"], (int, float)) else -1
     return (
         not r["contested"],
-        str(r["status"]).lower() not in ATTENTION,
+        # ATTENTION holds space-stripped values ("needsinput"); live statuses
+        # render as "Needs Input". Without the strip, the default sort never
+        # surfaces the sessions it exists to surface. matches() already strips.
+        str(r["status"]).lower().replace(" ", "") not in ATTENTION,
         not uncommitted(r),
         -ctx,
     )
