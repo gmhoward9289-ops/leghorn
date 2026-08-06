@@ -168,7 +168,7 @@ def stage_fleet() -> dict:
     )
     gh = bin_dir / "gh"
     gh.write_text("#!/usr/bin/env bash\nexec python3 %s \"$@\"\n" % gh_py)
-    os.chmod(gh, 0o755)
+    os.chmod(gh, 0o700)  # owner-only exec for stub binary (semgrep flags 0o755)
 
     claims, occupancy = {}, {}
     print("staging %d sessions..." % N_SESSIONS, flush=True)
