@@ -1,0 +1,105 @@
+{
+  "machine": {
+    "platform": "linux",
+    "python": "3.12.3",
+    "cpus": 4,
+    "loadavg_baseline": [0.09, 0.20, 0.10],
+    "mem_kb": {
+      "MemTotal": 16398452,
+      "MemAvailable": 15232784
+    }
+  },
+  "machine_under_load": {
+    "loadavg_at_start": [0.06, 0.10, 0.09],
+    "cpu_loaders": 4,
+    "note": "4 busy-loop processes pegged all cores during TUI sampling; loadavg rose to ~3–4 on a 4-CPU box"
+  },
+  "fleet": {
+    "home": "/tmp/leghorn-load-home",
+    "repos": 40,
+    "github_repos": 20,
+    "sessions": 24
+  },
+  "path_timings": {
+    "repos_on_disk": 40,
+    "github_repos": 20,
+    "sessions": 24,
+    "interval_s": 5.0,
+    "github_interval_s": 75.0,
+    "timings": {
+      "sessions_plus_git": {
+        "seconds": 0.279,
+        "n_rows": 24,
+        "warn": null
+      },
+      "commit_feed": {
+        "seconds": 0.049,
+        "n": 40
+      },
+      "github_feed": {
+        "seconds": 0.784,
+        "n": 0,
+        "warn": ""
+      },
+      "sessions_no_git": {
+        "seconds": 0.004,
+        "n_rows": 24
+      },
+      "alive_posix_os_kill": {
+        "seconds": 0.0,
+        "n": 24
+      },
+      "alive_windows_style_proxy_ps": {
+        "seconds": 0.15,
+        "n": 24,
+        "note": "N× `ps -p PID` per refresh — lower bound vs Windows tasklist"
+      }
+    },
+    "fast_collect_total_s": 0.328,
+    "note": "fast_collect_total = sessions_plus_git + commit_feed (mirrors Model._collect)"
+  },
+  "sample_full": {
+    "label": "live-tui-full",
+    "duration_s": 150,
+    "cpu_avg_pct": 0.5,
+    "cpu_p95_pct": 4.0,
+    "cpu_max_pct": 4.0,
+    "rss_avg_mb": 19.7,
+    "rss_max_mb": 19.7,
+    "exit_code": 0,
+    "n_rows": 24,
+    "n_commits": 40,
+    "n_gh_events": 0
+  },
+  "sample_light": {
+    "label": "live-tui-light (--no-commits --no-github --no-git)",
+    "duration_s": 150,
+    "cpu_avg_pct": 0.2,
+    "cpu_p95_pct": 2.0,
+    "cpu_max_pct": 4.0,
+    "rss_avg_mb": 18.4,
+    "rss_max_mb": 18.4,
+    "exit_code": 0,
+    "n_rows": 24,
+    "n_commits": 0,
+    "n_gh_events": 0
+  },
+  "ab_delta_pp": 0.3,
+  "verdict": {
+    "label": "ruled out",
+    "heuristics": {
+      "low_cpu": true,
+      "brief_spikes": true,
+      "memory_flat": true,
+      "under_budget": true,
+      "ab_delta_pp": 0.3,
+      "fast_total_s": 0.328
+    }
+  },
+  "limitations": [
+    "Ran on Linux cloud agent, not George's Windows desktop — Windows tasklist-per-pid path was estimated via ps -p proxy only",
+    "github_feed used a local stub gh (50ms sleep per call), not real network; still exercised 20-repo × 2-call fan-out with 6 workers",
+    "git-roost was a local stub shelling to git status/log per root, not the real git-roost binary",
+    "In-process Model secondary sample was aborted after live-TUI results were already conclusive (worker sampling contended under full CPU peg)"
+  ]
+}

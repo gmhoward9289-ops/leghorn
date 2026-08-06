@@ -1,0 +1,64 @@
+=== machine baseline ===
+{
+  "platform": "linux",
+  "python": "3.12.3",
+  "cpus": 4,
+  "loadavg": [
+    0.09375,
+    0.197265625,
+    0.0986328125
+  ],
+  "mem_kb": {
+    "MemTotal": 16398452,
+    "MemFree": 7112444,
+    "MemAvailable": 15232784
+  }
+}
+=== stage fleet ===
+staging 40 repos...
+staging 24 sessions...
+=== start CPU load (4 procs) ===
+loadavg under stress: [0.0615234375, 0.103515625, 0.08544921875]
+=== path timings (under load) ===
+{
+  "repos_on_disk": 40,
+  "github_repos": 20,
+  "sessions": 24,
+  "timings": {
+    "sessions_plus_git": {
+      "seconds": 0.279,
+      "n_rows": 24,
+      "warn": null
+    },
+    "commit_feed": {
+      "seconds": 0.049,
+      "n": 40
+    },
+    "github_feed": {
+      "seconds": 0.784,
+      "n": 0,
+      "warn": ""
+    },
+    "sessions_no_git": {
+      "seconds": 0.004,
+      "n_rows": 24
+    },
+    "alive_posix_os_kill": {
+      "seconds": 0.0,
+      "n": 24
+    },
+    "alive_windows_style_proxy_ps": {
+      "seconds": 0.15,
+      "n": 24,
+      "note": "N\u00d7 `ps -p PID` per refresh \u2014 lower bound vs Windows tasklist"
+    }
+  },
+  "interval_s": 5.0,
+  "github_interval_s": 75.0
+}
+=== sample LIVE TUI full 150s ===
+full cpu_avg=0.5% p95=4.0% max=4.0% rss=19.7MB exit=0
+=== sample LIVE TUI light 150s ===
+light cpu_avg=0.2% p95=2.0% max=4.0% rss=18.4MB exit=0
+=== sample Model worker full (60s) ===
+=== sample Model worker light (60s) ===
