@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: release-main
@@ -93,3 +94,13 @@ jobs:
           fi
           git tag "v${version}"
           git push origin "v${version}"
+
+      - name: Trigger the release pipeline
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' leghorn.py)
+          # Tag pushes from GITHUB_TOKEN do not fire other workflows; dispatch
+          # release.yml explicitly (same-repo workflow_dispatch is allowed).
+          gh workflow run release.yml --ref "v${version}"
