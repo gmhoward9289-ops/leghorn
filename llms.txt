@@ -5,9 +5,10 @@
 > your GitHub CI and open PRs with failures pinned until they go green, and a commit
 > feed across every repo, newest first.
 
-Two files, stdlib-only Python 3.9+. Runs on macOS and Linux (curses). Read-only by
-construction: it runs `gh`, read-only git plumbing, and (if present) `claudectl`, and
-never writes to a tree, a registry, or a session.
+Two files, stdlib-only Python 3.9+. Runs on macOS, Linux, and Windows (curses via
+windows-curses on Windows). Read-only by construction: it reads session transcripts,
+runs `gh` and read-only git plumbing, and never writes to a tree, a registry, or a
+session.
 
 ## What it's for
 
