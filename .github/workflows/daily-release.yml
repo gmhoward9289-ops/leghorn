@@ -1,0 +1,95 @@
+name: daily-release
+
+# Ship when main has moved since the last tag. Tag push triggers release.yml
+# (PyPI, npm, apt, Homebrew tap, winget).
+#
+# - A merged PR that already bumped __version__ (0.3 -> 0.4) is tagged as-is.
+# - Later commits on the same version bump the patch (0.4 -> 0.4.1 -> 0.4.2).
+#
+# Runs on every push to main (immediate feedback) and daily at 06:00 UTC as a
+# backstop. Skips quietly when nothing changed since the latest v* tag.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release-if-changed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Skip when main is unchanged since the last tag
+        id: gate
+        run: |
+          git fetch --tags --force
+          latest=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          if [ -z "$latest" ]; then
+            echo "No v* tags yet; tag v0.4 manually once to bootstrap." >&2
+            exit 1
+          fi
+          echo "latest_tag=$latest" >> "$GITHUB_OUTPUT"
+          tag_version="${latest#v}"
+          echo "tag_version=$tag_version" >> "$GITHUB_OUTPUT"
+          if git diff --quiet "$latest"..HEAD; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Nothing changed since $latest; skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Changes since $latest:"
+            git log --oneline "$latest"..HEAD
+          fi
+
+      - name: Decide whether to bump or ship the PR's version
+        if: steps.gate.outputs.skip != 'true'
+        id: plan
+        run: |
+          current=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' leghorn.py)
+          tag_version="${{ steps.gate.outputs.tag_version }}"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          if [ "$current" = "$tag_version" ]; then
+            echo "action=bump" >> "$GITHUB_OUTPUT"
+            echo "Same version ($current) as $tag_version tag; bumping patch."
+          else
+            echo "action=ship" >> "$GITHUB_OUTPUT"
+            echo "Version already bumped in tree ($current != $tag_version); shipping as-is."
+          fi
+
+      - name: Bump patch version
+        if: steps.gate.outputs.skip != 'true' && steps.plan.outputs.action == 'bump'
+        run: packaging/bump-patch.sh
+
+      - name: Verify
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          packaging/check-version-consistency.sh
+          python -m unittest discover -s tests
+
+      - name: Commit, tag, and push
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' leghorn.py)
+          git config user.name "leghorn-release-bot"
+          git config user.email "dev@swamplink.com"
+          if [ "${{ steps.plan.outputs.action }}" = "bump" ]; then
+            git add leghorn.py leghorn.1 package.json packaging/leghorn.rb
+            git commit -m "chore: release v${version}"
+            git push origin HEAD:main
+          fi
+          git tag "v${version}"
+          git push origin "v${version}"
