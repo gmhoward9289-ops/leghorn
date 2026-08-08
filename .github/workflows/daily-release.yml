@@ -1,13 +1,14 @@
 name: daily-release
 
-# Ship when main has moved since the last tag. Tag push triggers release.yml
-# (PyPI, npm, apt, Homebrew tap, winget).
+# Ship when main has moved since the last tag.
 #
-# - A merged PR that already bumped __version__ (0.3 -> 0.4) is tagged as-is.
-# - Later commits on the same version bump the patch (0.4 -> 0.4.1 -> 0.4.2).
+# - Merged PR already bumped __version__ (0.4 on main, latest tag v0.3) -> tag
+#   v0.4 and dispatch release.yml.
+# - New commits on an already-tagged version -> bump patch and ship, but pushing
+#   that bump to main needs secrets.RELEASE_PAT with branch-protection bypass.
+#   Without it, the job skips and a human (or PR) must bump __version__ first.
 #
-# Runs on every push to main (immediate feedback) and daily at 06:00 UTC as a
-# backstop. Skips quietly when nothing changed since the latest v* tag.
+# Runs on every push to main, daily at 06:00 UTC, and on manual dispatch.
 on:
   push:
     branches: [main]
@@ -41,7 +42,7 @@ jobs:
           git fetch --tags --force
           latest=$(git tag -l 'v*' --sort=-v:refname | head -1)
           if [ -z "$latest" ]; then
-            echo "No v* tags yet; tag v0.4 manually once to bootstrap." >&2
+            echo "No v* tags yet; merge a PR with __version__ bumped first." >&2
             exit 1
           fi
           echo "latest_tag=$latest" >> "$GITHUB_OUTPUT"
@@ -64,8 +65,14 @@ jobs:
           tag_version="${{ steps.gate.outputs.tag_version }}"
           echo "current=$current" >> "$GITHUB_OUTPUT"
           if [ "$current" = "$tag_version" ]; then
-            echo "action=bump" >> "$GITHUB_OUTPUT"
-            echo "Same version ($current) as $tag_version tag; bumping patch."
+            if [ -z "${{ secrets.RELEASE_PAT }}" ]; then
+              echo "action=skip-bump" >> "$GITHUB_OUTPUT"
+              echo "Same version ($current) as $tag_version tag, but RELEASE_PAT is not set."
+              echo "Bump __version__ in a PR, or add a bypass PAT as secrets.RELEASE_PAT."
+            else
+              echo "action=bump" >> "$GITHUB_OUTPUT"
+              echo "Same version ($current) as $tag_version tag; bumping patch."
+            fi
           else
             echo "action=ship" >> "$GITHUB_OUTPUT"
             echo "Version already bumped in tree ($current != $tag_version); shipping as-is."
@@ -76,13 +83,15 @@ jobs:
         run: packaging/bump-patch.sh
 
       - name: Verify
-        if: steps.gate.outputs.skip != 'true'
+        if: steps.gate.outputs.skip != 'true' && steps.plan.outputs.action != 'skip-bump'
         run: |
           packaging/check-version-consistency.sh
           python -m unittest discover -s tests
 
       - name: Commit, tag, and push
-        if: steps.gate.outputs.skip != 'true'
+        if: steps.gate.outputs.skip != 'true' && steps.plan.outputs.action != 'skip-bump'
+        env:
+          PUSH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
         run: |
           version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' leghorn.py)
           git config user.name "leghorn-release-bot"
@@ -90,17 +99,15 @@ jobs:
           if [ "${{ steps.plan.outputs.action }}" = "bump" ]; then
             git add leghorn.py leghorn.1 package.json packaging/leghorn.rb
             git commit -m "chore: release v${version}"
-            git push origin HEAD:main
+            git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
           fi
-          git tag "v${version}"
-          git push origin "v${version}"
+          git tag -f "v${version}"
+          git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "v${version}" --force
 
       - name: Trigger the release pipeline
-        if: steps.gate.outputs.skip != 'true'
+        if: steps.gate.outputs.skip != 'true' && steps.plan.outputs.action != 'skip-bump'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' leghorn.py)
-          # Tag pushes from GITHUB_TOKEN do not fire other workflows; dispatch
-          # release.yml explicitly (same-repo workflow_dispatch is allowed).
           gh workflow run release.yml --ref "v${version}"
