@@ -94,15 +94,15 @@ jobs:
             git commit -m "chore: release v${version}"
             git push origin HEAD:main
           fi
+          # This tag push fires release.yml on its own, because it goes out as
+          # RELEASE_PUSH_TOKEN rather than GITHUB_TOKEN -- a PAT-pushed tag does
+          # trigger other workflows, where a GITHUB_TOKEN-pushed one does not.
+          # There used to be an explicit `gh workflow run release.yml` step here
+          # to work around that, and once the PAT landed it started producing a
+          # second concurrent pipeline for every release: two identical runs
+          # racing to push the apt repo to gh-pages, one of them losing with
+          # "! [rejected] gh-pages (fetch first)" and marking the release red
+          # even though every artifact published. release.yml keeps its
+          # workflow_dispatch trigger for deliberate re-runs.
           git tag "v${version}"
           git push origin "v${version}"
-
-      - name: Trigger the release pipeline
-        if: steps.gate.outputs.skip != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' leghorn.py)
-          # Tag pushes from GITHUB_TOKEN do not fire other workflows; dispatch
-          # release.yml explicitly (same-repo workflow_dispatch is allowed).
-          gh workflow run release.yml --ref "v${version}"
