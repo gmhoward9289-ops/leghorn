@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for coop.sort_key.
+"""Tests for henhouse.sort_key.
 
 The attention sort compares status against ATTENTION, whose entries are
 space-stripped ("needsinput"); live statuses arrive as "Needs Input". Before
@@ -14,7 +14,7 @@ import importlib.util
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent.parent / "coop.py"
+SCRIPT = Path(__file__).resolve().parent.parent / "henhouse.py"
 
 
 def load():

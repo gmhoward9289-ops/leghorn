@@ -108,9 +108,9 @@ keys.
 The data layer is also a command of its own:
 
 ```bash
-python3 -m coop            # one table of sessions, for a hook or a pipe
-python3 -m coop --github   # the CI/PR feed as plain text
-python3 -m coop --json     # records, for piping somewhere else
+python3 -m henhouse            # one table of sessions, for a hook or a pipe
+python3 -m henhouse --github   # the CI/PR feed as plain text
+python3 -m henhouse --json     # records, for piping somewhere else
 ```
 
 ## Name

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""coop -- one table for every live Claude Code session: state and intent.
+"""henhouse -- one table for every live Claude Code session: state and intent.
 
 Claude Code writes a JSONL transcript per session, and every turn in it carries
 the model and its token usage -- so status, context and burn are all derivable
@@ -8,7 +8,7 @@ on is intent: ccwork's registry knows which worktree and branch a session holds
 and what it claimed it was doing, but nothing about whether that session is
 stuck, idle or eating context.
 
-coop joins them. `~/.claude/sessions/<pid>.json` carries the sessionId, which
+henhouse joins them. `~/.claude/sessions/<pid>.json` carries the sessionId, which
 names both the transcript file and the key ccwork's registry uses, so pid is a
 clean join key across all three sources.
 
@@ -16,13 +16,13 @@ A third source is git itself: what each tree has uncommitted and how far it has
 drifted from origin. Sessions report what they mean to do; git reports what they
 have actually done, which is the only one of the two that can be wrong.
 
-    coop                  # one table, sorted by what needs attention
-    coop -w               # redraw every 3s (the top/htop view)
-    coop --log            # commit feed across every repo, newest first
-    coop --log -w         # ...live
-    coop --wide           # don't truncate the task text
-    coop --no-git         # skip the git columns if they are ever slow
-    coop --json           # joined records, for piping somewhere else
+    henhouse                  # one table, sorted by what needs attention
+    henhouse -w               # redraw every 3s (the top/htop view)
+    henhouse --log            # commit feed across every repo, newest first
+    henhouse --log -w         # ...live
+    henhouse --wide           # don't truncate the task text
+    henhouse --no-git         # skip the git columns if they are ever slow
+    henhouse --json           # joined records, for piping somewhere else
 
 Read-only by construction: it reads transcripts and two state files, and gets
 git facts from `git-roost --json`, which enforces read-only at the argument
@@ -1034,7 +1034,7 @@ def main():
             width = shutil.get_terminal_size((160, 24)).columns
             body = render(args, width)
             sys.stdout.write("\033[H\033[2J")
-            sys.stdout.write(time.strftime("coop  %H:%M:%S") + "\n\n")
+            sys.stdout.write(time.strftime("henhouse  %H:%M:%S") + "\n\n")
             sys.stdout.write("\n".join(body) + "\n")
             sys.stdout.flush()
             time.sleep(args.watch)

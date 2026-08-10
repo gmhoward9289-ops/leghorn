@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for coop's GitHub feed (github_feed and friends).
+"""Tests for henhouse's GitHub feed (github_feed and friends).
 
 Run:  python3 -m unittest discover -s ~/Claude/bin/tests -v
 
@@ -19,7 +19,7 @@ import time
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent.parent / "coop.py"
+SCRIPT = Path(__file__).resolve().parent.parent / "henhouse.py"
 
 
 def load():

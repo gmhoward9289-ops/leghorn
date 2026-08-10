@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """leghorn -- full-screen live view of every Claude Code session and its git state.
 
-coop answers "what is the state right now" in one table, which is the right
+henhouse answers "what is the state right now" in one table, which is the right
 shape for a hook, a pipe or a glance. This is the other thing: a window you leave
 open on a second monitor while a dozen sessions work, where the eye catches a
 change without reading. Same facts, different job -- so the data layer is
-imported from coop rather than reimplemented, and this file is only ever a
+imported from henhouse rather than reimplemented, and this file is only ever a
 renderer.
 
     leghorn                  # three panes, refreshing every 5s
@@ -27,7 +27,7 @@ curses is stdlib on macOS and Linux; on Windows it comes from the
 windows-curses wheel (declared in pyproject.toml, installed automatically
 there, not needed anywhere else).
 
-Read-only, like coop: it reads session transcripts, and runs gh and read-only
+Read-only, like henhouse: it reads session transcripts, and runs gh and read-only
 git plumbing. It never writes to a tree, a registry or a session.
 """
 
@@ -54,24 +54,24 @@ __version__ = "0.4"
 
 
 def load_data_layer():
-    """Import coop, wherever this install put it.
+    """Import henhouse, wherever this install put it.
 
-    Three layouts exist. A checkout or a deb/brew libexec keeps coop.py
+    Three layouts exist. A checkout or a deb/brew libexec keeps henhouse.py
     beside this file; a bin directory may keep it extensionless beside a
     symlink (resolve() follows the link first); a pip/pipx install puts both
     on sys.path as ordinary modules. Sibling file first: when both exist, the
     one next to this file is the one this file was shipped with.
     """
     here = Path(__file__).resolve().parent
-    for candidate in (here / "coop.py", here / "coop"):
+    for candidate in (here / "henhouse.py", here / "henhouse"):
         if candidate.is_file():
-            loader = importlib.machinery.SourceFileLoader("coop", str(candidate))
-            spec = importlib.util.spec_from_loader("coop", loader)
+            loader = importlib.machinery.SourceFileLoader("henhouse", str(candidate))
+            spec = importlib.util.spec_from_loader("henhouse", loader)
             module = importlib.util.module_from_spec(spec)
             loader.exec_module(module)
             return module
-    import coop
-    return coop
+    import henhouse
+    return henhouse
 
 
 cb = load_data_layer()
@@ -158,7 +158,7 @@ def cp(pair):
 
 
 class Model:
-    """Polls coop's data layer on a worker thread; the UI only ever reads.
+    """Polls henhouse's data layer on a worker thread; the UI only ever reads.
 
     GitHub gets its own thread and its own, much slower clock: a gh sweep costs
     ~3s of network across the fleet, and the 5s session/git loop must never

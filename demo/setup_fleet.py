@@ -214,7 +214,7 @@ sys.exit(0)
 
 
 def write_git_roost_fallback():
-    """coop.py falls back to <LEGHORN_ROOT>/git-roost/git_roost.py when
+    """henhouse.py falls back to <LEGHORN_ROOT>/git-roost/git_roost.py when
     git-roost is not on PATH -- drop the real one there unmodified."""
     dest = GITHUB_ROOT / "git-roost" / "git_roost.py"
     dest.parent.mkdir(parents=True, exist_ok=True)

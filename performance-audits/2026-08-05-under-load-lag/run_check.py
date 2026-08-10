@@ -319,14 +319,14 @@ def count_children_kinds(pid: int) -> dict:
 def sample_model_worker(duration: float, use_git: bool, want_commits: bool,
                         want_github: bool, label: str) -> dict:
     """Run Model in-process under the fleet env; sample self CPU / children."""
-    # Apply fleet env before importing path-sensitive coop constants? coop
+    # Apply fleet env before importing path-sensitive henhouse constants? henhouse
     # already imported REPOS_ROOT at import time — re-bind after env set.
     env = env_for_fleet()
     for k, v in env.items():
         os.environ[k] = v
 
     import importlib
-    import coop as cb
+    import henhouse as cb
     importlib.reload(cb)
     import leghorn as lh
     importlib.reload(lh)
@@ -401,7 +401,7 @@ def time_paths() -> dict:
     for k, v in env.items():
         os.environ[k] = v
     import importlib
-    import coop as cb
+    import henhouse as cb
     importlib.reload(cb)
 
     out = {"repos_on_disk": 0, "github_repos": 0, "sessions": 0}

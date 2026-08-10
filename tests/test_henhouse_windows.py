@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the two places coop has to care what OS it is on.
+"""Tests for the two places henhouse has to care what OS it is on.
 
 Both behaviours were written on Windows, lived in an untracked copy of this
 file on that machine alone, and were absent here -- so this file exists to
@@ -28,7 +28,7 @@ import sys
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent.parent / "coop.py"
+SCRIPT = Path(__file__).resolve().parent.parent / "henhouse.py"
 
 
 def load():
@@ -74,7 +74,7 @@ class TestLiveness(unittest.TestCase):
 
 class TestGitStateJoin(unittest.TestCase):
     """git-roost reports `toplevel` with forward slashes even on Windows,
-    while the dirs coop looks up with are native. Unjoined, every git
+    while the dirs henhouse looks up with are native. Unjoined, every git
     column on Windows read as a dash."""
 
     def _gather(self, dirs, toplevel):

@@ -73,8 +73,8 @@ jobs:
           python -m venv /tmp/v
           /tmp/v/bin/pip install --quiet dist/*.whl
           /tmp/v/bin/leghorn --version
-          /tmp/v/bin/python -c "import leghorn, coop"
-          /tmp/v/bin/python -m coop --json > /dev/null
+          /tmp/v/bin/python -c "import leghorn, henhouse"
+          /tmp/v/bin/python -m henhouse --json > /dev/null
           test -f /tmp/v/share/man/man1/leghorn.1
 
       - name: Verify the .deb installs and the man page is readable

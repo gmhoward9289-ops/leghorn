@@ -33,7 +33,7 @@ class Leghorn < Formula
     # The renderer resolves its data layer as a sibling of its own resolved
     # path, so both files live in libexec and bin carries only a symlink --
     # bin/leghorn -> libexec/leghorn.py, resolve() follows it home.
-    libexec.install "leghorn.py", "coop.py"
+    libexec.install "leghorn.py", "henhouse.py"
     # The shipped shebang is `/usr/bin/env python3`, which would resolve to
     # whatever python happens to be first on PATH -- including a virtualenv the
     # user activated for something else. Pin it to the formula's interpreter.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the transcript telemetry provider -- coop's native replacement
+"""Tests for the transcript telemetry provider -- henhouse's native replacement
 for claudectl.
 
 The failure modes worth pinning are all silent ones. A wrong context window
@@ -32,7 +32,7 @@ def load(name):
     return mod
 
 
-cb = load("coop")
+cb = load("henhouse")
 
 
 def assistant(usage=None, tools=(), model="claude-sonnet-5"):
