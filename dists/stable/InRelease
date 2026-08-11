@@ -4,31 +4,31 @@ Hash: SHA512
 Architectures: all
 Codename: stable
 Components: main
-Date: Tue, 11 Aug 2026 02:19:13 +0000
+Date: Tue, 11 Aug 2026 02:29:33 +0000
 Description: live dashboard for Claude Code sessions, git state, and GitHub CI
 Label: leghorn
 Origin: leghorn
 Suite: stable
 MD5Sum:
- c310ffd22783396134dd4f43f11fa4d3              215 Release
- afd62528994151333b8840a216599c13            12948 main/binary-all/Packages
- 492ba5133abb16595ad113b7b0fadbbd             2802 main/binary-all/Packages.gz
+ f93a85c94a565ca27b2fb58c5c09d908              215 Release
+ 6db3b6d727763af08f7726f1799985d6            14030 main/binary-all/Packages
+ 2fb4b26e461c430d50fe3f7e6786f437             2984 main/binary-all/Packages.gz
 SHA1:
- 08082e28addccd10c4c911ee8e177d5c689dd82c              215 Release
- 372cae3730180ea5883d0358c1dc2ffd8a0b8624            12948 main/binary-all/Packages
- d16723f35b781e7afcbe37e4b6af0e98d4fe657a             2802 main/binary-all/Packages.gz
+ 08816dde5411d5cd2b89817735c876fa16e9ee62              215 Release
+ 9fafaabb5b98aca1a0aae48690e32fbce42cbefd            14030 main/binary-all/Packages
+ 5eec0dc8f33f75cd9b84a58bf3782d2fa23b6fc3             2984 main/binary-all/Packages.gz
 SHA256:
- 39f95ab6462a0a06daa2cc0efeada48279bd5be9f674630d4f79b01a3f2e8897              215 Release
- 96a3f6472ccde581e4a4763959d6d5f8ccdd513d781525faa175b458a4116785            12948 main/binary-all/Packages
- 2b03ba9e38323859d6e60f2c3cc061f655dab31050564645739c37d20ecccc7f             2802 main/binary-all/Packages.gz
+ 940bb6d880a368fd589a037d4b5561d3e61b3fc01f1a162813fc941cb1df0c1b              215 Release
+ f14e8a0fdd1a1aba496180ed632c58340859b25fd0aeb65abeef49b99ebaa49a            14030 main/binary-all/Packages
+ 3ffc3c1ff39a68189ac4432009503cfc6c1f54fd3fdb085aa3f6ed0191ef9a52             2984 main/binary-all/Packages.gz
 SHA512:
- 750dea07b6163b4019bf7766233930fee26ef88b2b84b0c9a75c2ec7a5c24541c78beb11b2658341ace32138781d6ffc835076de5ab3ac87a6cdf6c73f0ae0a3              215 Release
- 77d2fbc203225339e495e65e8b2d7ca84c581aeca56fd7a5bd95eb0a682a3cb49dc4dd00dd589849f89742acae1798efa65ce5972f7865ddbce118384fb7dda4            12948 main/binary-all/Packages
- 82a3d7ad09872b7a56a83f0fe81bffc8d240bda694097027d1b0f7c87b7e4df53e5317dba4c95db30f9e747099da7297276d9aa152f4eed3e3e518a5dca98800             2802 main/binary-all/Packages.gz
+ ac4d0d39b5cc0683d47a3fb453cff6fa0ec25992409157fe1ede1694efa813369334e0dc8b8e8b971d92ee5e0a5c70ae4decbb1c4d5a3dd6471da4dd7b896158              215 Release
+ e8dec4d7bed18d4955d3274df4d850fbfe1ada8caeb0849acf8255faa2bd1d713e8f4b4e2849098ed78ecbe9dadd577781e78e4dc9fbc679b29abeea7424bb3f            14030 main/binary-all/Packages
+ 8009b9eaaacc6682dfe532681c4749748301ad6f343da80813b28e2eb583ee4807e577be09404dead917a17b774be94b59a5cf9a3f9f0224e7d30d280a8fcc53             2984 main/binary-all/Packages.gz
 -----BEGIN PGP SIGNATURE-----
 
-iHUEARYKAB0WIQTxA/oBfj05YcifGYTQz3R61GtkcAUCanqGoQAKCRDQz3R61Gtk
-cCWtAP4haj6KH5F4ZB8/n5wINXbIiaUtj9VGtUxFgoTaNGaTGwD+KDp750C65WJ5
-Wo5Xx2wdz1RFewAtZFScwKUYEm7PdQY=
-=sunV
+iHUEARYKAB0WIQTxA/oBfj05YcifGYTQz3R61GtkcAUCanqJDQAKCRDQz3R61Gtk
+cCSaAP9hg7Vxl8xHjYJWLOAMSGKAiftgE9qdBATgCNPsrtwitgEA6LUmSMtA0Q1q
+S4k7jfEEA+xIAA6E1VtiQyArNx14HQE=
+=YNEY
 -----END PGP SIGNATURE-----
