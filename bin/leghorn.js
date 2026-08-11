@@ -7,7 +7,9 @@
 // and `npm i -g leghorn` is the install they will actually run. macOS and
 // Linux only: Windows leghorn needs the windows-curses *pip* dependency
 // (see pyproject.toml), which npm has no way to deliver, so Windows gets
-// winget or pip instead -- package.json's "os" field tells npm so.
+// pip instead -- package.json's "os" field tells npm so. (There is no winget
+// package: winget-releaser cannot bootstrap one, so that job was dropped on
+// 2026-08-11 and pip is the only Windows channel.)
 //
 // There is deliberately no postinstall Python check. A failing postinstall would
 // break `npm ci` in a project that merely lists leghorn as a devDependency; a
@@ -27,8 +29,7 @@ const MIN = [3, 9]; // matches requires-python in pyproject.toml
 // traceback from Python.
 if (process.platform === 'win32') {
   process.stderr.write('leghorn does not ship for Windows over npm.\n');
-  process.stderr.write('  winget install gmhoward9289-ops.leghorn\n');
-  process.stderr.write('  or: pip install leghorn  (needs windows-curses too)\n');
+  process.stderr.write('  pip install leghorn windows-curses\n');
   process.exit(1);
 }
 
