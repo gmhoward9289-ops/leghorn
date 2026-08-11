@@ -62,7 +62,13 @@ REAL_GIT_ROOST = Path(os.environ.get("REAL_GIT_ROOST_PY")
 
 
 def spawn_sleeper():
-    p = subprocess.Popen(["sleep", "3600"], stdout=subprocess.DEVNULL)
+    # Not `sleep`: that is a POSIX binary and is absent on Windows, where this
+    # raised WinError 2 -- the same class of assumption as the `rm -rf` above.
+    # The point is only to hold a real live pid for a session marker to join
+    # against, and the interpreter already running this script can do that on
+    # every platform.
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3600)"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return p.pid
 
 
