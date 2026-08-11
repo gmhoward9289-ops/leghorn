@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import subprocess
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -193,6 +195,51 @@ class TestGithubFeed(unittest.TestCase):
         self.assertEqual(warn, "")
         # Within the red tier the fresher event leads: c (-8000s) beats b (-9000s).
         self.assertEqual([e["repo"] for e in events], ["d", "c", "b", "e", "f", "a"])
+
+
+class TestGithubRepos(unittest.TestCase):
+    """github_repos against a real temp REPOS_ROOT -- no gh, just git.
+
+    Real repos rather than fake .git files because the dedupe reads the actual
+    origin URL, and the bug being pinned here is precisely that worktree
+    siblings report the same one.
+    """
+
+    def make(self, root, name, origin):
+        p = root / name
+        p.mkdir()
+        subprocess.run(["git", "init", "-q", str(p)], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(p), "remote", "add", "origin", origin],
+                       check=True, capture_output=True)
+        return p
+
+    def repos(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            # Three siblings on one origin, spelled three legal ways, plus a
+            # second GitHub repo and one swamplink remote that must not appear.
+            self.make(root, "proj", "https://github.com/o/proj.git")
+            self.make(root, "proj-wt-a", "git@github.com:o/proj.git")
+            self.make(root, "proj-wt-b", "https://github.com/O/Proj")
+            self.make(root, "other", "https://github.com/o/other.git")
+            self.make(root, "private", "swamplink:/srv/git/private.git")
+            orig = cb.REPOS_ROOT
+            cb.REPOS_ROOT = root
+            try:
+                return [p.name for p in cb.github_repos()]
+            finally:
+                cb.REPOS_ROOT = orig
+
+    def test_one_clone_per_origin_and_the_plain_checkout_wins(self):
+        got = self.repos()
+        # One row per distinct origin: the worktree siblings collapse into
+        # `proj`, and it is `proj` -- not a `-wt-` sibling -- that survives,
+        # so the pane labels the row with the repo's own name.
+        self.assertEqual(sorted(got), ["other", "proj"])
+
+    def test_non_github_remote_is_absent(self):
+        self.assertNotIn("private", self.repos())
 
 
 class TestEpoch(unittest.TestCase):
