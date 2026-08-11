@@ -127,11 +127,11 @@ Maintainer: George M. Howard <dev@swamplink.com>
 Depends: python3 (>= 3.9)
 Recommends: gh, git
 Filename: pool/main/l/leghorn/leghorn_0.4.3_all.deb
-Size: 28436
-MD5sum: a0b9afd3ddb4130b2cb882b5db995396
-SHA1: 71f5a2bce44145da5d5b2d389a40da9ac4b3f748
-SHA256: 9afcb3b7e356f69c3353d3a0e72d53b3272d8e32cba18d724f768846d093369b
-SHA512: 9d364c528ec3b1821b90a437bbd5380526a358c1f36a4b8c02bbcf2c8849d004a89c0802f6899570ec40233bec515fc9ae067425ed32e9f1188adcb106b91dd6
+Size: 28418
+MD5sum: c55246ca2181ad6668ed1a30f33be79b
+SHA1: 6469642769a7293021fa41ebd5f42a8bd7ed8497
+SHA256: 78d39bcc07d629728967ab3969654cbec173424e1faec546180658abbeac07ab
+SHA512: 9b4fee6267decf2e325384aabf6e31c387ccd6deb3e3e753cfa1cd398162362e828b9ae3c6134dbbe57e756cbb9e2726eee7eb3e049accc16fc64eae60686984
 Homepage: https://github.com/gmhoward9289-ops/leghorn
 Description: live dashboard for Claude Code sessions, git state, and GitHub CI
  A full-screen curses view you leave open on a second monitor while many
