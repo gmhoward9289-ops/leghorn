@@ -22,6 +22,7 @@ recordings would export HOME instead.
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -249,6 +250,27 @@ def write_registry(claims, occupancy):
     REGISTRY.write_text(json.dumps({"claims": claims, "occupancy": occupancy}))
 
 
+def _clear_readonly(func, path, _exc):
+    """Retry a delete after clearing the read-only bit.
+
+    This staged fleet contains real git repos, and git writes everything under
+    .git/objects read-only. On Windows os.unlink then fails with
+    PermissionError [WinError 5] partway through the tree, leaving it
+    half-deleted. POSIX does not care -- unlink needs write on the *directory*,
+    not the file -- which is why `rm -rf` never hit this.
+    """
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def _rmtree_force(target):
+    # onexc replaced onerror in 3.12; the callback shape we need is the same.
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(target, onexc=_clear_readonly)
+    else:
+        shutil.rmtree(target, onerror=_clear_readonly)
+
+
 def reset_demo_home():
     """Delete and recreate DEMO_HOME, refusing anything that is not ours.
 
@@ -274,7 +296,7 @@ def reset_demo_home():
             sys.exit(f"refusing to delete {target}: no {DEMO_MARKER} marker, so "
                      f"this script did not create it. Remove it by hand if you "
                      f"are sure, or point LEGHORN_DEMO_HOME somewhere else.")
-        shutil.rmtree(target)
+        _rmtree_force(target)
 
     target.mkdir(parents=True)
     (target / DEMO_MARKER).write_text(
