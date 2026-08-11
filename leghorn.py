@@ -50,7 +50,7 @@ except ImportError:  # pragma: no cover -- exercised only on a bare Windows box
         ) from None
     raise
 
-__version__ = "0.4.9"
+__version__ = "0.4.10"
 
 
 def load_data_layer():
