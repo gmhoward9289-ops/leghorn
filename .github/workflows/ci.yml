@@ -82,6 +82,34 @@ jobs:
           python3 /tmp/debx/usr/lib/leghorn/leghorn.py --version
           echo "dist/leghorn_${version}_all.deb ok"
 
+      # Every channel must ship henhouse.py beside leghorn.py -- leghorn is
+      # only a renderer and cannot start without its data layer. The wheel
+      # enforces this via only-include and the .deb via the check above, but
+      # npm's file list is hand-maintained and drifted: when coop.py was
+      # renamed to henhouse.py the module, the wheel, the deb and the release
+      # smoke test were all updated, and package.json's "files" array was not.
+      # It kept listing coop.py, so npm shipped leghorn.py with no data layer
+      # at all -- installable, and dead on first run. Nothing caught it,
+      # because a missing *file* in a tarball is not a failed publish.
+      - name: The npm tarball carries the data layer
+        run: |
+          set -euo pipefail
+          npm pack --dry-run --json > /tmp/pack.json
+          python3 - <<'PY'
+          import json, sys
+          d = json.load(open("/tmp/pack.json"))
+          # npm has emitted two shapes for this: a list of package objects, and
+          # a dict keyed by package name. Accept either rather than pinning the
+          # check to whatever npm the runner happens to ship.
+          entry = (d[0] if isinstance(d, list) else next(iter(d.values())))
+          files = {f["path"] for f in entry["files"]}
+          missing = {"leghorn.py", "henhouse.py", "bin/leghorn.js"} - files
+          if missing:
+              sys.exit("::error::npm tarball is missing %s -- see package.json files[]"
+                       % ", ".join(sorted(missing)))
+          print("npm tarball carries:", ", ".join(sorted(files)))
+          PY
+
   security:
     runs-on: ubuntu-latest
     container:

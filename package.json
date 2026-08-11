@@ -30,7 +30,7 @@
   "files": [
     "bin/leghorn.js",
     "leghorn.py",
-    "coop.py",
+    "henhouse.py",
     "leghorn.1"
   ],
   "os": [
