@@ -16,7 +16,7 @@ jobs:
     # in pyproject.toml, platform-gated), which is why this job installs it
     # explicitly below rather than relying on the package install step alone.
     # 3.14 is here because it is what the primary dev box actually runs -- every
-    # local test run happened on an interpreter CI never exercised. macos-13 is
+    # local test run happened on an interpreter CI never exercised. macos-15-intel is
     # here because macos-latest is arm64 now, so Intel Macs were untested.
     #
     # Windows is excluded from 3.14 on purpose: windows-curses wheels top out at
@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-13, windows-latest]
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
         python: ["3.9", "3.13", "3.14"]
         exclude:
           - os: windows-latest
