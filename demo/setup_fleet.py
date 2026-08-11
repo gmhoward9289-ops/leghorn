@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage a demo fleet for the leghorn GIFs.
 
-Creates a fake HOME (LEGHORN_DEMO_HOME, default /tmp/leghorn-demo-home) with
+Creates a fake HOME (LEGHORN_DEMO_HOME, default <tempdir>/leghorn-demo-home) with
 ~/.claude session files backed by live pids, transcripts with realistic usage,
 a ccwork-style registry (claims + occupancy) so the TASK column and contested
 rows have something to say, real git repos under ~/GitHub with commit
@@ -21,15 +21,32 @@ recordings would export HOME instead.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 
+# NEVER default this to USERPROFILE or HOME. main() deletes DEMO_HOME before
+# staging, so a default of "the user's home directory" makes the documented
+# way to run this script -- no env vars set -- into `rm -rf ~`. That is exactly
+# what it did: an earlier version fell back to USERPROFILE on Windows and HOME
+# elsewhere, and the /tmp fallback below was unreachable because HOME is always
+# set. It only ever failed harmlessly on Windows because `rm` is not on PATH in
+# PowerShell; from Git Bash it would have run.
+#
+# The tapes export USERPROFILE (Windows) / HOME (POSIX) to point *leghorn* at
+# the staged fleet. That is the right place for the spoofing -- in the
+# recording environment, not in the path this script deletes.
 DEMO_HOME = Path(os.environ.get("LEGHORN_DEMO_HOME")
-                 or (os.environ.get("USERPROFILE") if os.name == "nt" else None)
-                 or os.environ.get("HOME") or "/tmp/leghorn-demo-home")
+                 or Path(tempfile.gettempdir()) / "leghorn-demo-home")
+
+# Written into DEMO_HOME as soon as it is created, and required before any
+# later run is allowed to delete it. A directory this script did not make is a
+# directory it will not remove.
+DEMO_MARKER = ".leghorn-demo-fleet"
 CLAUDE = DEMO_HOME / ".claude"
 SESSIONS = CLAUDE / "sessions"
 PROJECTS = CLAUDE / "projects"
@@ -226,10 +243,41 @@ def write_registry(claims, occupancy):
     REGISTRY.write_text(json.dumps({"claims": claims, "occupancy": occupancy}))
 
 
+def reset_demo_home():
+    """Delete and recreate DEMO_HOME, refusing anything that is not ours.
+
+    Three guards, because the failure mode here is unrecoverable data loss and
+    a single check that a later edit can weaken is not enough:
+      1. never a real home directory, or an ancestor of one;
+      2. never the filesystem root or a drive root;
+      3. only a directory carrying the marker this script wrote.
+    shutil.rmtree rather than `rm -rf`: portable, and it does not silently
+    no-op on Windows where `rm` is usually absent from PATH.
+    """
+    target = DEMO_HOME.expanduser().resolve()
+    home = Path.home().resolve()
+
+    if target == home or target in home.parents:
+        sys.exit(f"refusing to touch {target}: that is your home directory "
+                 f"(or contains it). Set LEGHORN_DEMO_HOME to a scratch path.")
+    if target == Path(target.anchor) or len(target.parts) <= 1:
+        sys.exit(f"refusing to touch {target}: that is a filesystem root.")
+
+    if target.exists():
+        if not (target / DEMO_MARKER).exists():
+            sys.exit(f"refusing to delete {target}: no {DEMO_MARKER} marker, so "
+                     f"this script did not create it. Remove it by hand if you "
+                     f"are sure, or point LEGHORN_DEMO_HOME somewhere else.")
+        shutil.rmtree(target)
+
+    target.mkdir(parents=True)
+    (target / DEMO_MARKER).write_text(
+        "Staged by leghorn demo/setup_fleet.py. Safe to delete.\n",
+        encoding="utf-8")
+
+
 def main():
-    if DEMO_HOME.exists():
-        subprocess.run(["rm", "-rf", str(DEMO_HOME)])
-    DEMO_HOME.mkdir(parents=True)
+    reset_demo_home()
 
     write_gh_stub()
 
