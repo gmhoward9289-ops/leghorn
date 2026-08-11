@@ -29,7 +29,13 @@ esac
 
 # --- Homebrew ----------------------------------------------------------------
 rb=$(curl -sf "https://raw.githubusercontent.com/$OWNER/homebrew-tap/master/Formula/leghorn.rb")
-if grep -q "tags/v$VERSION" <<<"$rb"; then
+# Match the release-asset URL, not GitHub's auto-generated archive/refs/tags/
+# one. The formula moved to releases/download/ deliberately (see leghorn.rb's
+# header and #8) so `brew install` counts toward the release download stats --
+# and this check kept grepping for the old shape, reporting a stale formula on
+# every release since. A monitor that cries wolf is worse than no monitor: it
+# trains you to skim past the one time it is right.
+if grep -q "download/v$VERSION/" <<<"$rb"; then
   say PASS brew "brew install $OWNER/tap/leghorn"
 else
   pend brew "formula missing or stale in the tap; set TAP_PUSH_TOKEN and rerun release, or copy packaging/leghorn.rb by hand"
