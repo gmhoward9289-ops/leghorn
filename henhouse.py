@@ -729,19 +729,43 @@ def _repo_events(gh, repo):
 
 
 def github_repos():
-    """Local clones under ~/GitHub whose origin is github.com -- the swamplink
-    remotes have no Actions or PRs, and asking gh about them only burns time."""
+    """One clone per distinct GitHub origin, under REPOS_ROOT.
+
+    Swamplink remotes are skipped -- they have no Actions or PRs, so asking gh
+    about them only burns time.
+
+    Deduplicated by origin, which is the whole point: worktrees of one repo sit
+    beside it as sibling directories (roost, roost-wt-advice, roost-wt-trend)
+    and every one of them reports the same origin. Grouping by directory asked
+    gh about the same repository three times and rendered every run and every
+    pull request three times, so a pane showing 24 red CI events was showing
+    about 8 real ones. It also tripled the sweep's wall-clock for nothing.
+    """
     root = REPOS_ROOT
     if not root.is_dir():
         return []
-    out = []
+    seen = {}
     for p in sorted(root.iterdir()):
         if not (p / ".git").exists():
             continue
         url = git(p, "remote", "get-url", "origin") or ""
-        if "github.com" in url:
-            out.append(p)
-    return out
+        if "github.com" not in url:
+            continue
+        # Normalize so git@github.com:o/r.git and https://github.com/o/r
+        # collapse to the same key.
+        slug = url.strip()
+        for prefix in ("git@github.com:", "https://github.com/",
+                       "ssh://git@github.com/", "http://github.com/"):
+            if slug.startswith(prefix):
+                slug = slug[len(prefix):]
+                break
+        slug = slug[:-4] if slug.endswith(".git") else slug
+        slug = slug.rstrip("/").lower()
+        # First clone wins: sorted() puts the plain checkout ahead of its
+        # `-wt-*` worktree siblings, so the row is labelled with the repo's
+        # own name rather than a worktree's.
+        seen.setdefault(slug, p)
+    return list(seen.values())
 
 
 def github_feed(limit=40):
