@@ -743,6 +743,9 @@ def detail_lines(r):
 # list is not help -- the question a first-time viewer actually has is "what is
 # this symbol telling me", and before 2026-08-01 nothing on screen answered it.
 HELP = [
+    ("leghorn", "answers: what did this agent actually do?"),
+    ("", "a session reports intent; git reports what landed"),
+    ("", ""),
     ("SESSIONS", "every live session, joined to its worktree and real git state"),
     ("◉", "contested -- another live session is active in the same tree"),
     ("ctx", "context burned; yellow from 70%, red past 100% (? = estimate)"),

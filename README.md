@@ -2,10 +2,18 @@
 
 [![ci](https://github.com/gmhoward9289-ops/leghorn/actions/workflows/ci.yml/badge.svg)](https://github.com/gmhoward9289-ops/leghorn/actions/workflows/ci.yml)
 
-A full-screen live dashboard you leave open on a second monitor while many
-Claude Code sessions work: every live session joined to its worktree and
-**real git state**, your **GitHub CI and open PRs** with failures pinned until
-they go green, and a commit feed across every repo, newest first.
+**What did this agent actually do?**
+
+That is the question leghorn exists to answer. A session tells you what it
+*intended* — the task it was given, the model it is on, that it finished. Git
+tells you what landed. Only one of those two can be wrong, and it is never git.
+
+So leghorn is a full-screen live dashboard you leave open on a second monitor
+while many Claude Code sessions work: every live session joined to its worktree
+and **real git state**, your **GitHub CI and open PRs** with failures pinned
+until they go green, and a commit feed across every repo, newest first. Every
+pane is there to close the gap between what an agent reported and what is
+actually in the tree.
 
 ![leghorn watching a fleet: contested sessions, red CI, a session detail overlay, and the git toggle](demo/leghorn-demo.gif)
 
@@ -35,6 +43,26 @@ one checkout silently destroy each other's uncommitted work, and seeing it
 happen is the first step to not doing it. The GitHub pane ranks by what it
 costs to ignore: running first, then red (a failure must not scroll away),
 then stuck-in-queue, then everything else by freshness.
+
+## What each pane is for
+
+Every pane answers one part of *what did this agent actually do*, and none of
+them takes the session's word for it.
+
+**SESSIONS** — who is running, on what model, how much context they have burned,
+and **the worktree each one is standing in**. This is the only pane that reads
+the agent's own account of itself, and it is joined to real git state precisely
+so the account can be checked. A session reporting `Idle` in a tree with
+uncommitted changes is a different situation from one reporting `Idle` in a
+clean tree, and the session cannot tell you which it is.
+
+**GITHUB** — the CI runs and open PRs the work is supposed to end in. An agent
+that says it finished and a build that is red are both true statements about the
+same change; this is where they meet.
+
+**COMMITS** — what landed, across every repo, newest first. The plainest
+possible answer to the question: not a status, not a summary, the actual commit
+subjects in the order they happened.
 
 Two files, stdlib only, Python 3.9+. macOS and Linux need nothing beyond the
 standard library; Windows needs `windows-curses`, which is the only thing
