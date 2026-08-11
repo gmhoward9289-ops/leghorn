@@ -3,8 +3,13 @@ name: release
 # Builds the distributables for a tag, attaches them to the release, and
 # publishes everywhere at once: PyPI and npm (both via OIDC trusted
 # publishing, no stored tokens), the signed apt repo on gh-pages, the
-# Homebrew tap, and a PR against winget-pkgs for the Windows exe. Each
+# Homebrew tap, and a frozen Windows exe attached to the release. Each
 # publish job fails alone; the release artifacts land either way.
+#
+# winget was dropped 2026-08-11. winget-releaser cannot bootstrap a package
+# identifier -- the first version has to be a hand-written PR merged by
+# Microsoft's moderators -- so the job failed on every release it ever ran,
+# and total downloads across every Windows asset were in single digits.
 on:
   push:
     tags: ["v*"]
@@ -313,12 +318,11 @@ jobs:
         if: always()
         run: rm -rf "$RUNNER_TEMP/gnupg"
 
-  # Builds a Windows executable and attaches it to the release, so the winget
-  # job below has something other than a bare .py script to point at. --onedir
-  # rather than --onefile: onefile re-extracts to %TEMP% on every launch (bad
-  # for a TUI people leave open on a second monitor) and is the specific shape
-  # that trips AV heuristics and stalls winget's moderation queue. Shipped as
-  # a zip, which winget's "zip" installer type unpacks directly.
+  # Builds a Windows executable and attaches it to the release, so Windows
+  # users have something other than a bare .py script to grab. --onedir rather
+  # than --onefile: onefile re-extracts to %TEMP% on every launch, which is bad
+  # for a TUI people leave open on a second monitor, and is the specific shape
+  # that trips AV heuristics. Shipped as a zip.
   #
   # windows-curses has to be installed before the build, same as the test job
   # in ci.yml -- PyInstaller freezes whatever `import curses` resolves to at
@@ -356,64 +360,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber
-
-  # Opens (or updates) the PR against microsoft/winget-pkgs for this release,
-  # via the community winget-releaser action -- winget has no OIDC trusted-
-  # publishing equivalent, so this is the closest analog: no long-lived token
-  # on npm/PyPI's model, just a PAT scoped for exactly this one action to use.
-  #
-  # One-time setup this job depends on and cannot do for itself:
-  #   1. Fork microsoft/winget-pkgs to this account and keep the fork current
-  #      (winget-releaser pushes a branch to the fork, then opens the PR from
-  #      there against microsoft/winget-pkgs).
-  #   2. A WINGET_PAT secret on this repo -- unlike TAP_PUSH_TOKEN, this has to
-  #      be a *classic* PAT with the `public_repo` scope. Fine-grained PATs can
-  #      only be scoped to repos this account owns, and microsoft/winget-pkgs
-  #      is not one of them, so the classic-token/public_repo combination is
-  #      the only shape that works. That scope is wide -- write access to
-  #      every public repo on the account, not just the fork -- there is no
-  #      narrower option available.
-  #   3. The very first submission for a brand-new winget package identifier
-  #      needs a human-reviewed PR merged by Microsoft's moderators before
-  #      later versions auto-update smoothly. That review queue is outside
-  #      this workflow's control; until it lands, treat winget as best-effort.
-  # Until all three are in place, this job fails alone; everything else above
-  # still publishes.
-  winget:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, windows-exe]
-    runs-on: windows-latest
-    steps:
-      # winget-releaser only UPDATES a package that already exists; it cannot
-      # create one. leghorn has never been bootstrapped into winget-pkgs, so
-      # without this guard the job exits 1 on every tag for a condition no edit
-      # here can fix. Skip with a notice instead; the day a bootstrap PR merges
-      # this starts publishing on its own. See roost, which is mid-queue.
-      - name: Is the package bootstrapped in winget-pkgs yet?
-        id: bootstrapped
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PKG_ID: gmhoward9289-ops.leghorn
-        run: |
-          letter=$(echo "${PKG_ID:0:1}" | tr 'A-Z' 'a-z')
-          path="manifests/$letter/${PKG_ID//./\/}"
-          if gh api "repos/microsoft/winget-pkgs/contents/$path" --silent 2>/dev/null; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::$PKG_ID is not in winget-pkgs yet -- skipping the winget publish. The first version of a new package needs a human-reviewed PR merged by Microsoft's moderators."
-          fi
-
-      # SHA-pinned, not @v2: this job holds a classic PAT with public_repo --
-      # write access to every public repo on the account -- so a mutable tag on
-      # a third-party action is a supply-chain path straight to that token.
-      - uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
-        if: steps.bootstrapped.outputs.exists == 'true'
-        with:
-          identifier: gmhoward9289-ops.leghorn
-          installers-regex: '\.zip$'
-          token: ${{ secrets.WINGET_PAT }}
 
   # Publishes packaging/leghorn.rb (this repo's master copy) into the tap repo
   # (gmhoward9289-ops/homebrew-tap) as Formula/leghorn.rb, with a freshly

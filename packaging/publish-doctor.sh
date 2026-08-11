@@ -72,14 +72,23 @@ else
 fi
 
 # --- repo secrets the automation depends on ----------------------------------
-secrets=$(gh secret list --repo "$REPO" 2>/dev/null)
-for s in LEGHORN_APT_GPG_PRIVATE_KEY TAP_PUSH_TOKEN; do
-  if grep -q "^$s" <<<"$secrets"; then
-    say PASS "secret" "$s"
-  else
-    pend "secret" "$s missing: gh secret set $s --repo $REPO"
-  fi
-done
+# Listing secrets needs admin, and GITHUB_TOKEN does not have it -- in CI this
+# can only ever report a false PENDING, which is how this script's first
+# scheduled run went red while every channel was actually live. A missing
+# secret already announces itself as a failed publish job, so CI skips it and
+# the local run keeps the check.
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  say SKIP "secret" "needs admin to list; run this locally to check secrets"
+else
+  secrets=$(gh secret list --repo "$REPO" 2>/dev/null)
+  for s in LEGHORN_APT_GPG_PRIVATE_KEY TAP_PUSH_TOKEN; do
+    if grep -q "^$s" <<<"$secrets"; then
+      say PASS "secret" "$s"
+    else
+      pend "secret" "$s missing: gh secret set $s --repo $REPO"
+    fi
+  done
+fi
 
 echo
 if [ "$fail" = 0 ]; then
