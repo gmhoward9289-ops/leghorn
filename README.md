@@ -1,6 +1,7 @@
 # leghorn
 
 [![ci](https://github.com/gmhoward9289-ops/leghorn/actions/workflows/ci.yml/badge.svg)](https://github.com/gmhoward9289-ops/leghorn/actions/workflows/ci.yml)
+[![discussions](https://img.shields.io/github/discussions/gmhoward9289-ops/leghorn)](https://github.com/gmhoward9289-ops/leghorn/discussions)
 
 **What did this agent actually do?**
 
@@ -145,6 +146,10 @@ python3 -m henhouse --json     # records, for piping somewhere else
 
 The Leghorn is the chicken breed that spots everything first and is never
 quiet about it.
+
+## Questions or ideas?
+
+→ [Discussions](https://github.com/gmhoward9289-ops/leghorn/discussions)
 
 ## License
 
