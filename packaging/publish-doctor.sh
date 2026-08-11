@@ -28,7 +28,15 @@ case "$assets" in
 esac
 
 # --- Homebrew ----------------------------------------------------------------
-rb=$(curl -sf "https://raw.githubusercontent.com/$OWNER/homebrew-tap/master/Formula/leghorn.rb")
+# Read the formula through the API, not raw.githubusercontent.com. raw is
+# served from a CDN that caches for minutes, so straight after a release it
+# hands back the PREVIOUS version and this check reports a stale tap that is
+# not stale -- verified 2026-08-11, when raw said 0.4.12 while the tap's HEAD
+# commit was already "leghorn v0.4.13". The API reflects the commit
+# immediately. Third false alarm found in this script; a monitor that cries
+# wolf is worse than no monitor.
+rb=$(gh api "repos/$OWNER/homebrew-tap/contents/Formula/leghorn.rb" --jq '.content' 2>/dev/null \
+     | python3 -c 'import sys,base64; print(base64.b64decode(sys.stdin.read()).decode())' 2>/dev/null)
 # Match the release-asset URL, not GitHub's auto-generated archive/refs/tags/
 # one. The formula moved to releases/download/ deliberately (see leghorn.rb's
 # header and #8) so `brew install` counts toward the release download stats --
