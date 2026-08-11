@@ -1,7 +1,7 @@
 name: daily-release
 
 # Ship when main has moved since the last tag. Tag push triggers release.yml
-# (PyPI, npm, apt, Homebrew tap, winget).
+# (PyPI, npm, apt, Homebrew tap).
 #
 # - A merged PR that already bumped __version__ (0.3 -> 0.4) is tagged as-is.
 # - Later commits on the same version bump the patch (0.4 -> 0.4.1 -> 0.4.2).
