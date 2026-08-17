@@ -6,7 +6,7 @@
 **What did this agent actually do?**
 
 That is the question leghorn exists to answer. A session tells you what it
-*intended* — the task it was given, the model it is on, that it finished. Git
+*intended* — the task it was given, its status, that it finished. Git
 tells you what landed. Only one of those two can be wrong, and it is never git.
 
 So leghorn is a full-screen live dashboard you leave open on a second monitor
@@ -50,8 +50,9 @@ then stuck-in-queue, then everything else by freshness.
 Every pane answers one part of *what did this agent actually do*, and none of
 them takes the session's word for it.
 
-**SESSIONS** — who is running, on what model, how much context they have burned,
-and **the worktree each one is standing in**. This is the only pane that reads
+**SESSIONS** — who is running, what they say they are doing, how much context
+they have burned, and **the worktree each one is standing in**. This is the only
+pane that reads
 the agent's own account of itself, and it is joined to real git state precisely
 so the account can be checked. A session reporting `Idle` in a tree with
 uncommitted changes is a different situation from one reporting `Idle` in a

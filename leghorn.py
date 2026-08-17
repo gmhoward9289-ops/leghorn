@@ -50,7 +50,7 @@ except ImportError:  # pragma: no cover -- exercised only on a bare Windows box
         ) from None
     raise
 
-__version__ = "0.4.13"
+__version__ = "0.4.14"
 
 
 def load_data_layer():
@@ -705,8 +705,31 @@ def draw_footer(win, h, w, message, updated=0.0, gh_updated=0.0):
         if gh_updated:
             ages.append("gh %s" % cb.ago(time.time() - gh_updated))
         right = " · ".join(ages)
-        if right and w - len(right) - 2 > len(left) + 2:
-            win.addstr(h - 1, w - len(right) - 2, right, cp(C_DIM) | curses.A_DIM)
+        # Version, dim, in the true bottom-right corner -- roost's proven shape,
+        # riding whatever the last visible row is so it can never itself be the
+        # thing that gets clipped. It stops before the final column (addstr into
+        # the last cell wraps onto the next row, see draw_header) and is dropped
+        # whole when fewer than two spare columns remain: the key hints and the
+        # data ages are what the footer is *for*, so neither ever sheds or
+        # truncates mid-word to make room for a version number.
+        stamp = "v" + __version__
+        sx = w - 1 - len(stamp)
+        room = sx - len(left) - 1  # left starts at column 1, so it ends at len(left)
+        if right:
+            if w - len(right) - 4 - len(stamp) > len(left) + 2:
+                # Both fit: the ages shift left and the stamp takes the corner.
+                win.addstr(h - 1, w - len(right) - 4 - len(stamp), right,
+                           cp(C_DIM) | curses.A_DIM)
+            else:
+                # Too tight for both. The ages keep their corner slot and the
+                # stamp is dropped -- "how old is this data" is the honest fact
+                # a wall display must keep, per the header's fallback chain.
+                room = -1
+                if w - len(right) - 2 > len(left) + 2:
+                    win.addstr(h - 1, w - len(right) - 2, right,
+                               cp(C_DIM) | curses.A_DIM)
+        if room >= 2:
+            win.addstr(h - 1, sx, stamp, cp(C_DIM) | curses.A_DIM)
     except curses.error:
         pass
 
