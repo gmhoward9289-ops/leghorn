@@ -31,7 +31,7 @@ never an error.
 
 - Repository: https://github.com/gmhoward9289-ops/leghorn
 - README (full usage, install matrix, screenshots): https://github.com/gmhoward9289-ops/leghorn/blob/main/README.md
-- License: MIT
+- License: Apache-2.0
 - Related tool: roost (https://github.com/gmhoward9289-ops/roost) — a live dashboard
   focused on model/context-window/subagent state per session, complementary to
   leghorn's focus on git/worktree state and GitHub CI.

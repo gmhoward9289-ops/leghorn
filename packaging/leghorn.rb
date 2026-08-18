@@ -25,7 +25,7 @@ class Leghorn < Formula
   url "https://github.com/gmhoward9289-ops/leghorn/releases/download/v0.4.14/leghorn-0.4.14.tar.gz"
   sha256 "PLACEHOLDER_FILLED_BY_RELEASE_WORKFLOW"
   version "0.4.14"
-  license "MIT"
+  license "Apache-2.0"
 
   depends_on "python@3.13"
 
