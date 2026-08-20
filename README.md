@@ -140,8 +140,14 @@ The data layer is also a command of its own:
 ```bash
 python3 -m henhouse            # one table of sessions, for a hook or a pipe
 python3 -m henhouse --github   # the CI/PR feed as plain text
-python3 -m henhouse --json     # records, for piping somewhere else
+python3 -m henhouse --json     # {"schema": "henhouse.session.v1", "rows": [...]}
+python3 -m henhouse --json --legacy-json  # bare list (pre-v1 shape)
 ```
+
+The same transcript parsing is published as the standalone
+[henhouse](https://github.com/gmhoward9289-ops/henhouse) package for
+pytest-session-trace and other tools. This file is the vendored copy
+leghorn imports; the package is the source of truth for schema changes.
 
 ## Name
 
