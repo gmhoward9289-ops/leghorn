@@ -39,7 +39,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -47,18 +49,100 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+# ---------------------------------------------------------------------------
+# Configuration -- one block, one prefix.
+#
+# roost and leghorn grew their own env vars independently and ended up with
+# four conventions between them (ROOST_*, LEGHORN_ROOT, CCWORK_*, and bare
+# CLAUDE_PROJECTS_DIR / CURSOR_AGENT_HOME). Worse, the same two paths were
+# hardcoded in one tool and overridable in the other, so the pair could be
+# pointed at different data on one machine and silently disagree about what
+# was running.
+#
+# Every override here is LEGBAR_*. The older names are still honoured, so an
+# existing roost or leghorn install keeps whatever it already had configured;
+# the new name wins when both are set.
+# ---------------------------------------------------------------------------
+
 HOME = Path.home()
+
+
+def _env_path(name, default, *legacy):
+    """First non-empty of LEGBAR_<name> then any legacy names, else default."""
+    for key in (name,) + legacy:
+        raw = os.environ.get(key)
+        if raw:
+            return Path(raw).expanduser()
+    return Path(default).expanduser()
+
+
+def _env_int(name, default, *legacy):
+    for key in (name,) + legacy:
+        raw = os.environ.get(key)
+        if raw:
+            try:
+                return int(raw)
+            except ValueError:
+                pass  # a malformed override falls through to the default
+    return default
+
+
 # Where the clones live. Everything under this directory with a .git is a repo:
 # the commit feed walks them all, and the GitHub feed asks gh about the ones
 # with a github.com origin.
-REPOS_ROOT = Path(os.environ.get("LEGHORN_ROOT") or HOME / "GitHub").expanduser()
-SESSIONS_DIR = Path(os.environ.get("CCWORK_SESSIONS_DIR") or HOME / ".claude" / "sessions")
-STATE_DIR = Path(os.environ.get("CCWORK_STATE_DIR") or HOME / "Claude" / "worktrees")
+REPOS_ROOT = _env_path("LEGBAR_REPOS_ROOT", HOME / "GitHub", "LEGHORN_ROOT")
+
+# Claude Code's own on-disk state. SESSIONS_DIR holds one <pid>.json per live
+# session; PROJECTS_DIR holds the JSONL transcripts keyed by mangled cwd.
+SESSIONS_DIR = _env_path(
+    "LEGBAR_SESSIONS_DIR", HOME / ".claude" / "sessions", "CCWORK_SESSIONS_DIR")
+PROJECTS_DIR = _env_path(
+    "LEGBAR_PROJECTS_DIR", HOME / ".claude" / "projects", "CLAUDE_PROJECTS_DIR")
+
+STATE_DIR = _env_path(
+    "LEGBAR_STATE_DIR", HOME / "Claude" / "worktrees", "CCWORK_STATE_DIR")
 REGISTRY = STATE_DIR / "registry.json"
+
+# Cursor's agent transcripts: ~/.cursor/projects/<slug>/agent-transcripts/.
+# A separate writer from Claude Code, and the one that never announces itself
+# -- Cursor writes no session marker and no claim, so a fleet view that only
+# reads SESSIONS_DIR is blind to every Cursor agent on the machine.
+CURSOR_HOME = _env_path("LEGBAR_CURSOR_HOME", HOME / ".cursor", "CURSOR_AGENT_HOME")
+CURSOR_PROJECTS_DIR = CURSOR_HOME / "projects"
+
+# Cursor transcripts are never deleted, so without a horizon every agent that
+# ever ran shows up forever. A day is long enough to cover an overnight run.
+CURSOR_MAX_IDLE_SECS = _env_int(
+    "LEGBAR_CURSOR_MAX_IDLE_SECS", 86400, "ROOST_CURSOR_MAX_IDLE_SECS")
+
+# Cursor's global SQLite index. composerHeaders is the only place Cursor
+# records its own context meter (contextUsagePercent) and composer names --
+# roost's recon measured 71/71 live transcripts carrying neither, so a
+# transcript-only lane cannot fill the model or CTX cells (see roost's
+# docs/cursor-on-disk.md).
+def _cursor_state_db_default():
+    if sys.platform == "win32":
+        return HOME / "AppData" / "Roaming" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+    if sys.platform == "darwin":
+        return (HOME / "Library" / "Application Support" / "Cursor" / "User"
+                / "globalStorage" / "state.vscdb")
+    return HOME / ".config" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+
+
+CURSOR_STATE_DB = _env_path(
+    "LEGBAR_CURSOR_STATE_DB", _cursor_state_db_default(), "ROOST_CURSOR_STATE_DB")
+
+# Which discovery lanes run at all. Set to "claude" alone on a machine with no
+# Cursor install to skip the directory walk entirely.
+BACKENDS_DEFAULT = "claude,cursor"
 
 ATTENTION = ("needsinput", "waiting", "error", "failed")
 
-SCHEMA_SESSION = "henhouse.session.v1"
+
+def backends():
+    raw = os.environ.get("LEGBAR_BACKENDS") or os.environ.get("ROOST_BACKENDS") \
+        or BACKENDS_DEFAULT
+    return {b.strip().lower() for b in raw.split(",") if b.strip()}
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +159,7 @@ SCHEMA_SESSION = "henhouse.session.v1"
 # the answer is always near the end; scanning whole files once per refresh
 # would dominate the render loop.
 
-PROJECTS_DIR = Path(os.environ.get("CLAUDE_PROJECTS_DIR") or HOME / ".claude" / "projects")
+# PROJECTS_DIR is declared once, in the configuration block at the top.
 
 TAIL_BYTES = 256 * 1024
 
@@ -98,6 +182,20 @@ WRITE_TOOLS = ("Write", "Edit", "NotebookEdit")
 
 # A turn is "live" if the transcript was touched this recently.
 WORKING_SECS = 90
+
+# Subagent liveness. Both thresholds come from roost, and the gap between them
+# is the point: a subagent has no pid of its own -- it runs inside its parent's
+# process -- so mtime is the only evidence there is.
+#
+# ACTIVE is deliberately much tighter than WORKING_SECS. A parent session may
+# legitimately sit quiet for a minute while the human reads; a subagent that has
+# been handed a task is either writing to its transcript or it has finished, so
+# half a minute of silence already means "not working right now".
+AGENT_ACTIVE_SECS = 30
+# RECENT is the horizon for a subagent that is no longer active but is still
+# worth counting as part of this session's fan-out -- usually the run that just
+# came back. Older than this and it is history, not the current picture.
+AGENT_RECENT_SECS = 3600
 
 
 def context_window(model):
@@ -158,8 +256,272 @@ def read_tail(path):
     return records
 
 
-def summarize(records, mtime):
-    """One transcript's records -> the telemetry fields build() consumes."""
+def count_subagents(sid, now=None):
+    """(active, recent) subagent transcripts for one session id.
+
+    Subagents run inside their parent's process, so there is no pid to probe and
+    nothing in SESSIONS_DIR to join against -- a fleet view built on the pid join
+    alone is blind to every one of them, which is why this field read 0 forever.
+    What they do leave is a transcript, one level deeper than the session's own:
+
+        projects/<slug>/<parentSessionId>/subagents/agent-<id>.jsonl
+
+    The parent session id names the directory, so the join is a path lookup
+    rather than a search. mtime is then the only liveness evidence available:
+    active means the file moved within AGENT_ACTIVE_SECS, recent means within
+    AGENT_RECENT_SECS.
+
+    roost additionally gates on whether the parent process is still alive -- a
+    subagent whose parent has exited is an "orphan" however fresh its transcript
+    looks, because nothing can still be writing to it. Here that gate is already
+    closed upstream: load_sessions() only yields sessions whose pid is alive, so
+    every sid reaching this function has a live parent by construction.
+
+    The slug is unknown (it encodes the session's cwd, which can change), so
+    every project directory is checked for a child named sid. That is one
+    listdir plus a direct is_dir() probe -- no recursive walk.
+    """
+    if not sid or not PROJECTS_DIR.is_dir():
+        return 0, 0
+    now = time.time() if now is None else now
+    active = recent = 0
+    try:
+        projects = list(PROJECTS_DIR.iterdir())
+    except OSError:
+        return 0, 0
+    for proj in projects:
+        subs = proj / sid / "subagents"
+        if not subs.is_dir():
+            continue
+        try:
+            entries = list(subs.iterdir())
+        except OSError:
+            continue
+        for f in entries:
+            if not (f.name.startswith("agent-") and f.suffix == ".jsonl"):
+                continue
+            try:
+                age = now - f.stat().st_mtime
+            except OSError:
+                continue
+            if age <= AGENT_ACTIVE_SECS:
+                active += 1
+            if age <= AGENT_RECENT_SECS:
+                recent += 1
+    return active, recent
+
+
+# agentId -> the short `description` an Agent tool call was launched with.
+# Module-level and never pruned: a finished agent's description is still
+# worth showing while its row lingers in AGENT_RECENT_SECS, and re-fetching
+# it from a parent transcript that may have scrolled the record out of any
+# tail window is not something a fresh call can redo.
+_AGENT_DESCRIPTIONS = {}
+# Parent transcript path (str) -> bytes already scanned for descriptions.
+_HARVEST_POS = {}
+
+
+def harvest_agent_descriptions(parent_path):
+    """Pull each subagent's short description out of the parent's own
+    transcript, the way roost does.
+
+    A subagent's own transcript never states what it was asked to do in
+    short form -- only the parent's `toolUseResult` carries the `description`
+    the Agent tool call was given, keyed by agentId. Incremental: only bytes
+    appended since the last scan of this parent are read, so a curses view
+    polling every few seconds doesn't re-read a growing transcript from byte
+    0 on every tick.
+    """
+    key = str(parent_path)
+    pos = _HARVEST_POS.get(key, 0)
+    try:
+        size = parent_path.stat().st_size
+        if size < pos:
+            pos = 0  # truncated or replaced -- start over
+        if size == pos:
+            return
+        with parent_path.open("rb") as fh:
+            fh.seek(pos)
+            data = fh.read()
+    except OSError:
+        return
+    # Consume whole lines only; a half-written trailing line waits for the
+    # next pass instead of being parsed as garbage and skipped forever.
+    cut = data.rfind(b"\n") + 1
+    _HARVEST_POS[key] = pos + cut
+    for line in data[:cut].decode("utf-8", "replace").splitlines():
+        if '"agentId"' not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        result = rec.get("toolUseResult")
+        if not isinstance(result, dict):
+            continue
+        agent_id = result.get("agentId")
+        description = result.get("description")
+        if agent_id and description:
+            _AGENT_DESCRIPTIONS[agent_id] = description
+
+
+def subagent_task(path):
+    """Fallback label: the opening line of the task prompt, from the
+    subagent's own transcript.
+
+    Used when harvest_agent_descriptions() has no `description` for this
+    agent yet -- the parent's toolUseResult record is written when the Agent
+    call is made, but a caller can race it, and a sibling-fanned-out prompt
+    ("Finish a stranded work stream...") is often identical across several
+    agents, so this is a weaker label than the harvested one, not a
+    replacement for it. The task prompt an Agent tool call hands a subagent
+    is always its first user turn -- everything after is the subagent's own
+    work, not the brief it was given -- so a single readline() gets the
+    whole answer without parsing the rest of a transcript that can run to
+    megabytes.
+    """
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            first = fh.readline()
+    except OSError:
+        return ""
+    if not first.strip():
+        return ""
+    try:
+        rec = json.loads(first)
+    except ValueError:
+        return ""
+    content = (rec.get("message") or {}).get("content")
+    if isinstance(content, list):
+        content = " ".join(
+            b.get("text", "") for b in content
+            if isinstance(b, dict) and b.get("type") == "text")
+    if not isinstance(content, str) or not content.strip():
+        return ""
+    return content.strip().splitlines()[0].strip()
+
+
+SESSION_TOPIC_SCAN_LINES = 50
+
+
+def session_topic(path):
+    """First real thing the human said in a top-level session, one line.
+
+    henhouse's "task" field comes from the claims registry, which is nearly
+    always empty in practice -- most sessions never write a claim, so
+    everywhere that field is shown ends up saying nothing more specific than
+    a repo name. Claude Code and Cursor both title a session (or its own
+    task-list row) from what the human actually asked for, so this is the
+    fallback that lets a fleet view say the same thing -- "which one is
+    this" answered the way the tool the human already has open answers it.
+
+    Unlike a subagent transcript, whose first record is always its task
+    prompt, a top-level transcript leads with a handful of queue-operation
+    and attachment records before the human's own first message -- so this
+    scans forward instead of trusting line 1, but only up to
+    SESSION_TOPIC_SCAN_LINES: that preamble is short and bounded, and a
+    transcript that still hasn't shown a real user turn by then isn't going
+    to on this pass. isMeta records are hook- or system-injected text (e.g.
+    a <system-reminder>), not something the human said, and are skipped for
+    the same reason a stray <system-reminder> without isMeta is skipped too.
+    """
+    try:
+        fh = path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    try:
+        with fh:
+            for i, line in enumerate(fh):
+                if i >= SESSION_TOPIC_SCAN_LINES:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if rec.get("type") != "user" or rec.get("isMeta"):
+                    continue
+                content = (rec.get("message") or {}).get("content")
+                if isinstance(content, list):
+                    content = " ".join(
+                        b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text")
+                if not isinstance(content, str):
+                    continue
+                content = content.strip()
+                if not content or content.startswith("<system-reminder"):
+                    continue
+                return content.splitlines()[0].strip()
+    except OSError:
+        return ""
+    return ""
+
+
+def list_subagents(session_ids, now=None):
+    """Live-ish subagent rows for the SUBAGENTS pane, keyed by parent sid.
+
+    Same transcript join as count_subagents, but returns one dict per agent so
+    the renderer can show roost's panel rather than a bare count. session_ids
+    is an iterable of parent sids that are still alive -- orphans are excluded
+    by construction.
+    """
+    if not PROJECTS_DIR.is_dir():
+        return []
+    now = time.time() if now is None else now
+    wanted = {s for s in session_ids if s}
+    if not wanted:
+        return []
+    try:
+        projects = list(PROJECTS_DIR.iterdir())
+    except OSError:
+        return []
+    rows = []
+    for proj in projects:
+        for sid in wanted:
+            subs = proj / sid / "subagents"
+            if not subs.is_dir():
+                continue
+            try:
+                entries = list(subs.iterdir())
+            except OSError:
+                continue
+            # The parent transcript sits beside the subagents/ dir it owns --
+            # harvest before reading agent files so a freshly-completed
+            # agent's description is already in _AGENT_DESCRIPTIONS below.
+            harvest_agent_descriptions(proj / ("%s.jsonl" % sid))
+            for f in entries:
+                if not (f.name.startswith("agent-") and f.suffix == ".jsonl"):
+                    continue
+                try:
+                    age = now - f.stat().st_mtime
+                except OSError:
+                    continue
+                if age > AGENT_RECENT_SECS:
+                    continue
+                agent_id = f.stem
+                if agent_id.startswith("agent-"):
+                    agent_id = agent_id[6:]
+                rows.append({
+                    "parent_sid": sid,
+                    "agent_id": agent_id,
+                    "task": _AGENT_DESCRIPTIONS.get(agent_id) or subagent_task(f),
+                    "idle_secs": int(age),
+                    "state": "working" if age <= AGENT_ACTIVE_SECS else "idle",
+                })
+    rows.sort(key=lambda r: (0 if r["state"] == "working" else 1, r["idle_secs"]))
+    return rows
+
+
+def summarize(records, mtime, sid=None, now=None):
+    """One transcript's records -> the telemetry fields build() consumes.
+
+    sid is the session's own id, used only to find its subagents; without it the
+    subagent counts are 0, which is what a caller with no sid should get rather
+    than a guess.
+    """
+    now = time.time() if now is None else now
     model = None
     context_tokens = None
     burn = 0
@@ -203,7 +565,7 @@ def summarize(records, mtime):
                 # split_path and the INFRA filter both expect POSIX separators.
                 files[target.replace("\\", "/")] = True
 
-    idle = max(0.0, time.time() - mtime)
+    idle = max(0.0, now - mtime)
     if idle < WORKING_SECS:
         status = "working" if (last_role == "user" or last_had_tool) else "needsinput"
     elif last_role == "assistant" and not last_had_tool:
@@ -215,9 +577,18 @@ def summarize(records, mtime):
     if context_tokens:
         pct = 100.0 * context_tokens / context_window(model)
 
+    active_agents, recent_agents = count_subagents(sid, now)
+
     return {
         "status": status,
+        # Seconds since the transcript last moved. status says WHICH WAY a
+        # conversation is pending -- needsinput means it is waiting on the
+        # human, working means it is waiting on the model -- and this says how
+        # long it has been that way. Without it a reply that has been sat
+        # unanswered for an hour looks exactly like one from ten seconds ago.
+        "idle_secs": idle,
         "context_pct": pct,
+        "context_tokens": context_tokens,
         "model": model,
         "burn_tokens": burn,
         "files_modified": files,
@@ -225,7 +596,14 @@ def summarize(records, mtime):
         # equivalent derived from token counts, which is unrelated to a flat
         # subscription -- a number that reads as money but never was.
         "cost_usd": None,
-        "active_subagents": 0,
+        # Was hardcoded 0, which made a session running five subagents look
+        # identical to one running none -- and the fan-out is usually the whole
+        # reason the session's context is climbing.
+        "active_subagents": active_agents,
+        # Fan-out that has come back but not yet aged out. Kept alongside the
+        # active count so "0 working, 3 finished in the last hour" and "nothing
+        # ever ran here" stay distinguishable.
+        "recent_subagents": recent_agents,
         "estimate": {"verified": True},
     }
 
@@ -246,7 +624,7 @@ def load_transcripts(sessions):
         except OSError:
             missing += 1
             continue
-        telemetry[pid] = summarize(read_tail(path), mtime)
+        telemetry[pid] = summarize(read_tail(path), mtime, sid)
     warn = None
     if missing and not telemetry:
         warn = "no transcripts found for %d live session(s)" % missing
@@ -264,15 +642,37 @@ def load_registry():
 
 
 def alive(pid):
-    # os.kill(pid, 0) is a liveness probe on POSIX and a loaded gun on Windows:
-    # CPython routes any signal other than CTRL_C_EVENT/CTRL_BREAK_EVENT to
-    # TerminateProcess, so the probe would kill every session it asked about.
+    """True if the process exists. os.kill(pid, 0) is POSIX-only.
+
+    On Windows it is not merely unsupported, it is a loaded gun: CPython routes
+    any signal other than CTRL_C_EVENT/CTRL_BREAK_EVENT to TerminateProcess, so
+    the "probe" would kill every session it asked about.
+
+    The Windows answer used to be one `tasklist` subprocess per pid per refresh,
+    with a 10s timeout each. That is a process spawn and a full process-table
+    scan to answer a question the kernel can answer with a handle open/close, and
+    at a dozen sessions it is what put a floor under the refresh interval.
+    OpenProcess(SYNCHRONIZE) is the same question asked directly -- microseconds,
+    no subprocess, no timeout to tune.
+
+    Two semantics worth knowing, both inherited from the handle model rather
+    than chosen here:
+      * A process that has exited but still has an open handle held somewhere
+        (its parent has not reaped it) can still be opened, so it reads alive
+        until the last handle closes. tasklist would already call it gone.
+      * A process owned by another user can fail to open for want of rights,
+        and reads as gone. Sessions in SESSIONS_DIR are this user's own, so
+        neither case arises on the path that matters.
+    """
     if sys.platform == "win32":
-        out = subprocess.run(
-            ("tasklist", "/FI", "PID eq %d" % pid, "/NH", "/FO", "CSV"),
-            capture_output=True, text=True, timeout=10,
-        )
-        return ('"%d"' % pid) in out.stdout
+        import ctypes
+
+        SYNCHRONIZE = 0x00100000
+        h = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, int(pid))
+        if h:
+            ctypes.windll.kernel32.CloseHandle(h)
+            return True
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -875,6 +1275,7 @@ def build(telemetry, claims, occupancy, sessions, use_git=True):
             "context_pct": t.get("context_pct"),
             "cost_usd": t.get("cost_usd"),
             "subagents": t.get("active_subagents") or 0,
+            "subagents_recent": t.get("recent_subagents") or 0,
             "verified": ((t.get("estimate") or {}).get("verified")),
             "contested": False,
             "git": None,
@@ -1027,12 +1428,242 @@ def render(args, width):
         key=sort_key,
     )
     if args.json:
-        payload = rows if args.legacy_json else {"schema": SCHEMA_SESSION, "rows": rows}
-        return [json.dumps(payload, indent=2)]
+        return [json.dumps(rows, indent=2)]
     lines = fmt(rows, args.wide, width)
     if warn:
         lines.append("note: %s -- status and context unavailable" % warn)
     return lines
+
+
+# ---------------------------------------------------------------------------
+# The Cursor lane.
+#
+# Cursor is a second agent writer on the same machine and the only one that
+# never announces itself: it writes no <pid>.json marker, so the pid-join that
+# finds every live Claude session finds nothing here. What it does write is
+# ~/.cursor/projects/<slug>/agent-transcripts/<agent-id>/*.jsonl, and <slug>
+# encodes the absolute cwd -- which is enough to answer "what is Cursor doing,
+# and where" without reading its SQLite state at all.
+#
+# Liveness is therefore inferred from transcript mtime rather than a process
+# probe. That is weaker than the Claude lane's os.kill(pid, 0) and is labelled
+# as such: a Cursor row means "this transcript moved recently", not "this
+# process exists". CURSOR_MAX_IDLE_SECS is the horizon; transcripts are never
+# cleaned up, so without it every agent that ever ran would show up forever.
+# ---------------------------------------------------------------------------
+
+
+def cursor_slug_to_cwd(slug):
+    """Decode a Cursor project-slug back to an absolute path.
+
+    The encoding is lossy: it joins path parts with '-', and '-' is legal
+    inside a directory name, so `c-Users-gmhow-dev-heron-ops` is equally
+    readable as `dev/heron/ops` and `dev/heron-ops`. Splitting naively gets
+    every hyphenated repo in this estate wrong -- heron-ops, swamp-ops,
+    open-vanity, counting-chicken-wings.
+
+    The filesystem is the only thing that can settle it, so each segment is
+    resolved greedily longest-first against what actually exists on disk. A
+    slug that resolves nowhere (another machine's path, a deleted checkout)
+    falls back to the naive split, which is wrong in the same way it was
+    before but never raises.
+    """
+    parts = [p for p in str(slug).split("-") if p]
+    if not parts:
+        return ""
+    if len(parts[0]) == 1 and parts[0].isalpha():
+        base, rest, sep = parts[0].lower() + ":\\", parts[1:], "\\"
+    else:
+        base, rest, sep = "/", parts, "/"
+
+    resolved, cur, i = [], base, 0
+    while i < len(rest):
+        # Longest first: prefer 'heron-ops' over 'heron' when both could match.
+        for k in range(len(rest), i, -1):
+            cand = "-".join(rest[i:k])
+            if os.path.isdir(os.path.join(cur, cand)):
+                resolved.append(cand)
+                cur = os.path.join(cur, cand)
+                i = k
+                break
+        else:
+            return base + sep.join(rest)   # nothing on disk -- naive split
+    return base + sep.join(resolved)
+
+
+def _cursor_ms_to_epoch(ms):
+    """composerHeaders timestamps are ms since epoch; tolerate seconds too."""
+    if not isinstance(ms, (int, float)) or ms <= 0:
+        return None
+    return ms / 1000.0 if ms > 1e12 else float(ms)
+
+
+def read_cursor_composer_headers(db_path=None):
+    """Non-archived parent composers from Cursor's state.vscdb, keyed by
+    composer id: name, subtitle, ctx_pct (Cursor's own meter), last_write.
+
+    Empty on any error -- a missing DB is normal on a machine that has never
+    run Cursor, and the view must not care. Opened read-only via URI: Cursor
+    keeps this file open while it runs, and a write-mode open can fail or
+    corrupt.
+    """
+    path = Path(db_path) if db_path else CURSOR_STATE_DB
+    if path is None or not path.is_file():
+        return {}
+    headers = {}
+    try:
+        uri = "file:%s?mode=ro" % path.resolve().as_posix()
+        con = sqlite3.connect(uri, uri=True, timeout=0.5)
+        try:
+            cur = con.execute(
+                "SELECT composerId, lastUpdatedAt, createdAt, value "
+                "FROM composerHeaders "
+                "WHERE COALESCE(isSubagent, 0) = 0 "
+                "AND COALESCE(isArchived, 0) = 0")
+            for cid, lu, created, val in cur:
+                try:
+                    h = json.loads(val) if val else {}
+                except ValueError:
+                    h = {}
+                if not isinstance(h, dict):
+                    h = {}
+                # Draft empty-state and ephemeral chat composers are noise.
+                if h.get("isDraft") or cid == "empty-state-draft":
+                    continue
+                if h.get("unifiedMode") == "chat" and h.get("isEphemeral"):
+                    continue
+                pct = h.get("contextUsagePercent")
+                headers[cid] = {
+                    "name": (h.get("name") or "").strip() or None,
+                    "subtitle": (h.get("subtitle") or "").strip() or None,
+                    "ctx_pct": float(pct) if isinstance(pct, (int, float)) else None,
+                    "last_write": _cursor_ms_to_epoch(
+                        h.get("lastUpdatedAt") or lu
+                        or h.get("createdAt") or created),
+                }
+        finally:
+            con.close()
+    except (sqlite3.Error, OSError, ValueError):
+        return {}
+    return headers
+
+
+def _cursor_scan_transcript(path):
+    """Newest user_query and best-effort model from a Cursor transcript.
+
+    Tail-read like Claude's. The model is rare on purpose: parent records
+    almost never carry message.model, so the usual source is a spawned Task
+    tool_use whose input names the model -- the only place roost's recon
+    found one across 71 live files.
+    """
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            if size > TAIL_BYTES:
+                fh.seek(size - TAIL_BYTES)
+                fh.readline()          # drop the partial line the seek landed in
+            blob = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return "", None
+    task, model = "", None
+    for line in blob.splitlines():
+        if '"' not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue                   # a torn last line is normal, not an error
+        if not isinstance(rec, dict):
+            continue
+        text = rec.get("text") or rec.get("content")
+        if isinstance(text, str):
+            m = re.search(r"<user_query>\s*(.*?)\s*</user_query>", text, re.DOTALL)
+            if m:
+                task = " ".join(m.group(1).split())
+        msg = rec.get("message") if isinstance(rec.get("message"), dict) else {}
+        found = msg.get("model") or rec.get("model")
+        if not found:
+            content = msg.get("content") or rec.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if (isinstance(part, dict)
+                            and part.get("type") == "tool_use"
+                            and part.get("name") == "Task"
+                            and isinstance(part.get("input"), dict)
+                            and part["input"].get("model")):
+                        found = part["input"]["model"]
+        if found:
+            model = str(found)         # forward scan: the newest mention wins
+    return task, model
+
+
+def load_cursor_sessions(now=None):
+    """Recently-active Cursor agents, shaped like the Claude session rows.
+
+    Returns dicts with the same keys the renderer reads for a Claude row, plus
+    ``source="cursor"``. ``pid`` is None on purpose: there is no process to
+    join against, and a fake one would make a weaker signal look like the
+    stronger one.
+
+    Rows are enriched from composerHeaders when state.vscdb is readable:
+    ``ctx_pct`` is Cursor's own meter, the composer name backs up a transcript
+    with no user_query, and lastUpdatedAt can refresh liveness when the header
+    is newer than the transcript. Without the DB the lane degrades to exactly
+    what it was -- mtime and task text -- rather than failing.
+    """
+    if "cursor" not in backends():
+        return []
+    root = CURSOR_PROJECTS_DIR
+    if not root.is_dir():
+        return []
+    now = time.time() if now is None else now
+    headers = read_cursor_composer_headers()
+    rows = []
+    try:
+        projects = list(root.iterdir())
+    except OSError:
+        return []
+    for proj in projects:
+        transcripts = proj / "agent-transcripts"
+        if not transcripts.is_dir():
+            continue
+        cwd = cursor_slug_to_cwd(proj.name)
+        try:
+            agents = list(transcripts.iterdir())
+        except OSError:
+            continue
+        for agent in agents:
+            if not agent.is_dir():
+                continue
+            files = [f for f in agent.glob("*.jsonl") if f.is_file()]
+            if not files:
+                continue
+            newest = max(files, key=lambda f: f.stat().st_mtime)
+            idle = now - newest.stat().st_mtime
+            h = headers.get(agent.name) or {}
+            # The header's lastUpdatedAt can move without the transcript (a
+            # turn that wrote no JSONL); take whichever says fresher.
+            if h.get("last_write"):
+                idle = min(idle, now - h["last_write"])
+            if idle > CURSOR_MAX_IDLE_SECS:
+                continue
+            task, model = _cursor_scan_transcript(newest)
+            rows.append({
+                "source": "cursor",
+                "pid": None,
+                "name": agent.name[:8],
+                "sessionId": agent.name,
+                "cwd": cwd,
+                "idle_secs": int(idle),
+                "status": "working" if idle < WORKING_SECS else "idle",
+                "task": task or h.get("name") or h.get("subtitle") or "",
+                # Cursor's own meter, not a transcript inference -- measured,
+                # the transcripts carry no usage at all.
+                "ctx_pct": h.get("ctx_pct"),
+                "model": model,
+            })
+    rows.sort(key=lambda r: r["idle_secs"])
+    return rows
 
 
 def main():
@@ -1049,8 +1680,6 @@ def main():
     ap.add_argument("--no-git", action="store_true",
                     help="skip the git columns (no per-tree git calls)")
     ap.add_argument("--json", action="store_true", help="emit joined records as JSON")
-    ap.add_argument("--legacy-json", action="store_true",
-                    help="with --json, emit a bare list instead of the henhouse.session.v1 wrapper")
     args = ap.parse_args()
 
     if not args.watch:
