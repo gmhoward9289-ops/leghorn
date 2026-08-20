@@ -22,7 +22,8 @@ have actually done, which is the only one of the two that can be wrong.
     henhouse --log -w         # ...live
     henhouse --wide           # don't truncate the task text
     henhouse --no-git         # skip the git columns if they are ever slow
-    henhouse --json           # joined records, for piping somewhere else
+    henhouse --json           # {"schema": "henhouse.session.v1", "rows": [...]}
+    henhouse --legacy-json    # bare list of rows (pre-schema --json shape)
 
 Read-only by construction: it reads transcripts and two state files, and gets
 git facts from `git-roost --json`, which enforces read-only at the argument
@@ -1024,8 +1025,10 @@ def render(args, width):
         build(telemetry, claims, occupancy, sessions, use_git=not args.no_git),
         key=sort_key,
     )
-    if args.json:
-        return [json.dumps(rows, indent=2)]
+    if args.json or args.legacy_json:
+        if args.legacy_json:
+            return [json.dumps(rows, indent=2)]
+        return [json.dumps({"schema": "henhouse.session.v1", "rows": rows}, indent=2)]
     lines = fmt(rows, args.wide, width)
     if warn:
         lines.append("note: %s -- status and context unavailable" % warn)
@@ -1045,7 +1048,11 @@ def main():
     ap.add_argument("--wide", action="store_true", help="do not truncate the task text")
     ap.add_argument("--no-git", action="store_true",
                     help="skip the git columns (no per-tree git calls)")
-    ap.add_argument("--json", action="store_true", help="emit joined records as JSON")
+    ap.add_argument("--json", action="store_true",
+                    help="emit joined records as JSON "
+                         '({"schema": "henhouse.session.v1", "rows": [...]})')
+    ap.add_argument("--legacy-json", action="store_true",
+                    help="emit a bare JSON list of rows (pre-schema --json shape)")
     args = ap.parse_args()
 
     if not args.watch:

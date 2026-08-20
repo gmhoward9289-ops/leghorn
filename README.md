@@ -140,8 +140,20 @@ The data layer is also a command of its own:
 ```bash
 python3 -m henhouse            # one table of sessions, for a hook or a pipe
 python3 -m henhouse --github   # the CI/PR feed as plain text
-python3 -m henhouse --json     # records, for piping somewhere else
+python3 -m henhouse --json     # {"schema": "henhouse.session.v1", "rows": [...]}
+python3 -m henhouse --legacy-json  # bare list of rows (pre-schema --json)
 ```
+
+`--json` used to print a JSON array. That is a break: pipes that assumed a
+list need `--legacy-json`. The wrapper is the [henhouse](https://github.com/gmhoward9289-ops/henhouse)
+session schema; this file remains the vendored parser (no pip dependency).
+
+## Library
+
+The transcript parser is also published as
+[henhouse](https://github.com/gmhoward9289-ops/henhouse) (`from henhouse import
+iter_tool_calls`). This repo keeps a copy so a two-file, stdlib-only install
+does not grow a pip dependency.
 
 ## Name
 

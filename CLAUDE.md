@@ -1,7 +1,9 @@
 # Notes for AI agents working on leghorn
 
 Two files, stdlib only, Python 3.9+. `leghorn.py` is the curses renderer;
-`henhouse.py` is the data layer and a working CLI in its own right. Read-only by
+`henhouse.py` is the data layer and a working CLI in its own right.
+Transcript parsing source of truth is the henhouse package; this file remains
+the vendored copy until a later optional import. Read-only by
 construction: it reads session transcripts, shells out to `git` and `gh`, and
 must never write to a tree, a registry or a session. Every data source is optional and degrades
 to a labelled gap — "cannot see github" and "nothing is happening" must never
