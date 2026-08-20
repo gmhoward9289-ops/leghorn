@@ -81,7 +81,7 @@ Homebrew (macOS and Linux):
 brew install gmhoward9289-ops/tap/leghorn
 ```
 
-npm:
+npm (macOS and Linux only — use pipx on Windows):
 
 ```bash
 npm install -g leghorn
