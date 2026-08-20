@@ -144,12 +144,12 @@ python3 -m henhouse --json     # {"schema": "henhouse.session.v1", "rows": [...]
 python3 -m henhouse --json --legacy-json  # bare list (pre-v1 shape)
 ```
 
-The same transcript parsing is published as the standalone
-[henhouse](https://github.com/gmhoward9289-ops/henhouse) package for
+The transcript parsing library lives in the separate
+[henhouse](https://github.com/gmhoward9289-ops/henhouse) PyPI package for
 pytest-session-trace and other tools. Pin recorded sessions in CI with
 [pytest-session-trace](https://github.com/gmhoward9289-ops/pytest-session-trace)
-(`pip install pytest-session-trace`). This file is the vendored copy
-leghorn imports; the package is the source of truth for schema changes.
+(`pip install pytest-session-trace`). This repo's `henhouse.py` is the live
+session table only — see `docs/henhouse-ecosystem.md` for how the names relate.
 
 ## Name
 
