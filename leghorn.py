@@ -248,14 +248,8 @@ class Model:
             self.busy = True
         rows, commits, warn, error = [], [], None, ""
         try:
-            sessions = cb.load_sessions()
-            telemetry, warn = cb.load_transcripts(sessions)
-            claims, occupancy = cb.load_registry()
-            rows = sorted(
-                cb.build(telemetry, claims, occupancy, sessions,
-                         use_git=self.use_git),
-                key=cb.sort_key,
-            )
+            rows, warn = cb.fleet_rows(use_git=self.use_git)
+            rows = sorted(rows, key=cb.sort_key)
             if self.want_commits:
                 commits = cb.commit_feed(COMMIT_LIMIT)
         except Exception as exc:  # a dashboard that dies on one bad repo is useless
@@ -736,17 +730,22 @@ def draw_footer(win, h, w, message, updated=0.0, gh_updated=0.0):
 
 def detail_lines(r):
     g = r.get("git") or {}
+    src = r.get("source") or "claude"
+    if r.get("pid") is None:
+        session = "%s  (%s)" % (r["name"], src)
+    else:
+        session = "%s  (pid %d · %s)" % (r["name"], r["pid"], src)
     lines = [
-        ("session", "%s  (pid %d)" % (r["name"], r["pid"])),
+        ("session", session),
         ("status", "%s%s" % (r["status"],
-                             "  · %d subagent(s)" % r["subagents"] if r["subagents"] else "")),
+                             "  · %d subagent(s)" % r["subagents"] if r.get("subagents") else "")),
         ("context", "%s" % (("%.0f%%" % r["context_pct"]) if isinstance(
             r["context_pct"], (int, float)) else "-")),
         ("cost", ("$%.2f" % r["cost_usd"]) if isinstance(r["cost_usd"], (int, float)) else "-"),
         ("project", "%s / %s" % (r["project"], r["tree"] or "-")),
         ("branch", r["branch"] or "-"),
         ("directory", r["git_dir"] or r["dir"] or "-"),
-        ("located by", r["located_by"]),
+        ("located by", r.get("located_by") or "-"),
     ]
     if g:
         lines += [

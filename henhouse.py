@@ -713,17 +713,25 @@ def split_path(raw):
         project = parts[i + 1] if len(parts) > i + 1 else "-"
         tree = parts[i + 2] if len(parts) > i + 2 else "(primary)"
         return project, tree
+    # REPOS_ROOT is a container (historically ~/GitHub; on COOPER usually ~/dev),
+    # never a project -- the repo below it is the project. Matching on the
+    # basename "GitHub" alone collapsed every ~/dev/<repo> session to project
+    # "dev" with no tree, which made the contested heuristic fire on the whole
+    # working root.
+    try:
+        under = p.resolve().relative_to(REPOS_ROOT.resolve()).parts
+    except (ValueError, OSError):
+        under = None
+    if under is not None:
+        if not under:
+            return "(repos root)", "unscoped"
+        return under[0], "(primary)"
     try:
         rel = p.relative_to(HOME).parts
     except ValueError:
         return p.name or str(p), ""
     if not rel:
         return "(home)", ""
-    # ~/GitHub is a container, not a project -- the repo below it is the project.
-    if rel[0] == "GitHub":
-        if len(rel) == 1:
-            return "(GitHub root)", "unscoped"
-        return rel[1], "(primary)"
     return rel[0], ""
 
 
@@ -749,7 +757,7 @@ def project_from_files(paths):
     return max(votes.items(), key=lambda kv: kv[1])[0]
 
 
-PSEUDO_PROJECTS = ("-", "(GitHub root)", "(home)")
+PSEUDO_PROJECTS = ("-", "(GitHub root)", "(repos root)", "(home)")
 
 
 def tree_path(project, tree):
@@ -932,7 +940,7 @@ def commit_feed(limit):
 
 def fmt_feed(commits, wide, width):
     if not commits:
-        return ["no commits found under ~/GitHub"]
+        return ["no commits found under %s" % REPOS_ROOT]
     cols = [
         ("AGE", lambda c: ago(time.time() - c["ts"])),
         ("REPO", lambda c: c["repo"]),
@@ -1292,12 +1300,12 @@ def build(telemetry, claims, occupancy, sessions, use_git=True):
         for r in rows:
             r["git"] = states.get(r["git_dir"])
 
-    # Two live sessions in one working tree is the collision ccwork guards against.
-    # Sharing ~/GitHub is not a collision -- it is just where they were launched --
-    # so the container pseudo-project never counts as contested.
+    # Contested is re-derived after Cursor rows are merged (see mark_contested /
+    # fleet_rows). The path heuristic here only covers the Claude-only path
+    # that build() still serves on its own; fleet_rows overwrites it.
     seen = {}
     for r in rows:
-        if r["project"] in ("(GitHub root)", "-", "(home)"):
+        if r["project"] in PSEUDO_PROJECTS:
             continue
         seen.setdefault((r["project"], r["tree"]), []).append(r)
     for _, group in seen.items():
@@ -1305,6 +1313,103 @@ def build(telemetry, claims, occupancy, sessions, use_git=True):
             for r in group:
                 r["contested"] = True
     return rows
+
+
+def mark_contested(rows):
+    """Re-derive ``contested`` from the real git working copy.
+
+    ``build()``'s (project, tree) heuristic only understands paths under
+    REPOS_ROOT. Sessions outside it -- historically every checkout under
+    ``~/dev`` while REPOS_ROOT was still ``~/GitHub`` -- collapsed to one
+    pseudo-project and every row looked contested. Git already knows the
+    answer: two sessions contest only when ``rev-parse --show-toplevel``
+    resolves to the same directory.
+    """
+    roots = {}
+    for r in rows:
+        d = r.get("dir") or ""
+        if not d:
+            r["worktree"] = ""
+            continue
+        if d not in roots:
+            top = git(Path(d), "rev-parse", "--show-toplevel") or ""
+            roots[d] = os.path.normcase(os.path.normpath(top.strip())) if top else ""
+        r["worktree"] = roots[d]
+
+    counts = {}
+    for r in rows:
+        if r.get("worktree"):
+            counts[r["worktree"]] = counts.get(r["worktree"], 0) + 1
+    for r in rows:
+        r["contested"] = counts.get(r.get("worktree") or "", 0) > 1
+
+
+def fleet_rows(use_git=True):
+    """Claude + Cursor sessions shaped for the table and ``--json``.
+
+    ``load_cursor_sessions`` was imported with legbar's henhouse but never
+    joined into ``render`` / leghorn's collect loop, so a Cursor-only machine
+    (COOPER) painted an empty SESSIONS pane while discovery itself worked.
+    """
+    sessions = load_sessions()
+    telemetry, warn = load_transcripts(sessions)
+    claims, occupancy = load_registry()
+    rows = build(telemetry, claims, occupancy, sessions, use_git=use_git)
+
+    for r in rows:
+        r["source"] = "claude"
+        t = telemetry.get(r["pid"]) or {}
+        r.setdefault("idle_secs", t.get("idle_secs"))
+        if r.get("cost_usd") is None and t.get("cost_usd") is not None:
+            r["cost_usd"] = t.get("cost_usd")
+
+    # Claims are usually empty; the transcript's first real user turn is what
+    # the human recognises in their own session list. Explicit claims win.
+    if any(not r.get("task") for r in rows):
+        transcripts = transcript_index()
+        for r in rows:
+            if r.get("task") or r.get("source") != "claude":
+                continue
+            path = transcripts.get(r.get("session_id"))
+            if path:
+                r["task"] = session_topic(path)
+
+    for c in load_cursor_sessions():
+        project, tree = split_path(c["cwd"])
+        rows.append({
+            "source": "cursor",
+            "pid": None,
+            "name": c["name"],
+            "session_id": c["sessionId"],
+            "dir": c["cwd"],
+            "project": project,
+            "tree": tree,
+            "located_by": "cwd",
+            "branch": "",
+            "task": c["task"],
+            "status": c["status"],
+            "context_pct": c.get("ctx_pct"),
+            "cost_usd": None,
+            "subagents": 0,
+            "subagents_recent": 0,
+            "verified": None,
+            "contested": False,
+            "git": None,
+            "git_dir": c["cwd"] or "",
+            "idle_secs": c["idle_secs"],
+        })
+
+    if use_git:
+        cursor_dirs = [r["git_dir"] for r in rows
+                       if r.get("source") == "cursor" and r.get("git_dir")]
+        if cursor_dirs:
+            states = gather_git(cursor_dirs)
+            for r in rows:
+                if r.get("source") == "cursor" and r.get("git_dir"):
+                    r["git"] = states.get(r["git_dir"])
+
+    mark_contested(rows)
+    return rows, warn
 
 
 def uncommitted(r):
@@ -1324,7 +1429,7 @@ def sort_key(r):
 
 def fmt(rows, wide, width):
     if not rows:
-        return ["no live Claude Code sessions"]
+        return ["no live sessions"]
 
     def ctx(r):
         v = r["context_pct"]
@@ -1422,13 +1527,8 @@ def render(args, width):
             return [json.dumps(commits, indent=2)]
         return fmt_feed(commits, args.wide, width)
 
-    sessions = load_sessions()
-    telemetry, warn = load_transcripts(sessions)
-    claims, occupancy = load_registry()
-    rows = sorted(
-        build(telemetry, claims, occupancy, sessions, use_git=not args.no_git),
-        key=sort_key,
-    )
+    rows, warn = fleet_rows(use_git=not args.no_git)
+    rows = sorted(rows, key=sort_key)
     if args.json:
         payload = rows if args.legacy_json else {"schema": SCHEMA_SESSION, "rows": rows}
         return [json.dumps(payload, indent=2)]
