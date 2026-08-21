@@ -16,8 +16,11 @@ jobs:
     # in pyproject.toml, platform-gated), which is why this job installs it
     # explicitly below rather than relying on the package install step alone.
     # 3.14 is here because it is what the primary dev box actually runs -- every
-    # local test run happened on an interpreter CI never exercised. macos-13 is
-    # here because macos-latest is arm64 now, so Intel Macs were untested.
+    # local test run happened on an interpreter CI never exercised. macos-15-intel
+    # is here because macos-latest is arm64 now, so Intel Macs were untested.
+    # (It replaced macos-13, whose image GitHub retired in Dec 2025 -- jobs
+    # asking for it queue forever. macos-15-intel is the designated successor,
+    # available until Aug 2027; when it goes, the Intel leg goes with it.)
     #
     # Windows is excluded from 3.14 on purpose: windows-curses wheels top out at
     # 3.13 (see pyproject.toml), so that leg would fail on dependency resolution
@@ -26,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-13, windows-latest]
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
         python: ["3.9", "3.13", "3.14"]
         exclude:
           - os: windows-latest
@@ -37,6 +40,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - name: Install windows-curses
         if: runner.os == 'Windows'
         run: pip install windows-curses
@@ -62,6 +67,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - name: Version consistency across artifacts
         run: packaging/check-version-consistency.sh
       - name: The .deb builds and carries the same version
@@ -119,3 +126,12 @@ jobs:
       - uses: actions/checkout@v7
       - name: Semgrep
         run: semgrep scan --config p/python --config p/secrets --error --metrics=off .
+
+  codespell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: codespell-project/actions-codespell@v2
+        with:
+          path: leghorn.py,henhouse.py,docs,.
+          skip: .git,*.pyc,__pycache__,tests/fixtures
