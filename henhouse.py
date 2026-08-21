@@ -138,6 +138,8 @@ BACKENDS_DEFAULT = "claude,cursor"
 
 ATTENTION = ("needsinput", "waiting", "error", "failed")
 
+SCHEMA_SESSION = "henhouse.session.v1"
+
 
 def backends():
     raw = os.environ.get("LEGBAR_BACKENDS") or os.environ.get("ROOST_BACKENDS") \
@@ -1428,7 +1430,8 @@ def render(args, width):
         key=sort_key,
     )
     if args.json:
-        return [json.dumps(rows, indent=2)]
+        payload = rows if args.legacy_json else {"schema": SCHEMA_SESSION, "rows": rows}
+        return [json.dumps(payload, indent=2)]
     lines = fmt(rows, args.wide, width)
     if warn:
         lines.append("note: %s -- status and context unavailable" % warn)
@@ -1680,6 +1683,8 @@ def main():
     ap.add_argument("--no-git", action="store_true",
                     help="skip the git columns (no per-tree git calls)")
     ap.add_argument("--json", action="store_true", help="emit joined records as JSON")
+    ap.add_argument("--legacy-json", action="store_true",
+                    help="with --json, emit a bare list instead of the henhouse.session.v1 wrapper")
     args = ap.parse_args()
 
     if not args.watch:
