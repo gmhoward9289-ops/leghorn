@@ -999,7 +999,7 @@ def _loop(stdscr, model, args):
                     gh_events, speed)
         note = message or error or (
             "%s -- status and context unavailable" % warn if warn else "")
-        draw_footer(stdscr, h, w, note, updated, _gh_updated)
+        draw_footer(stdscr, h, w, note, updated, gh_updated)
 
         if modal == "help":
             overlay(stdscr, h, w, "HELP", HELP, "any key to close")
