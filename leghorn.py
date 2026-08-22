@@ -334,9 +334,14 @@ class Pane:
         try:
             self.win.attron(attr)
             self.win.addstr(self.y, self.x, "╭" + "─" * (self.w - 2) + "╮")
-            for row in range(1, self.h - 1):
-                self.win.addstr(self.y + row, self.x, "│")
-                self.win.addstr(self.y + row, self.x + self.w - 1, "│")
+            # vline draws the whole side in one call instead of one addstr per
+            # row -- a tall pane was issuing dozens of Windows Console API
+            # calls a frame just for its two vertical borders, which carries
+            # real per-call overhead there even though each write is one
+            # character.
+            if self.h > 2:
+                self.win.vline(self.y + 1, self.x, "│", self.h - 2)
+                self.win.vline(self.y + 1, self.x + self.w - 1, "│", self.h - 2)
             self.win.addstr(self.y + self.h - 1, self.x,
                             "╰" + "─" * (self.w - 2) + "╯")
             self.win.attroff(attr)

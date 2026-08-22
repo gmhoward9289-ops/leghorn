@@ -244,6 +244,18 @@ class HeaderEnrichedSessions(unittest.TestCase):
         row = henhouse.load_cursor_sessions()[0]
         self.assertEqual(row["name"], "abc12345")
 
+    def test_no_header_name_but_a_known_model_names_the_lane_instead(self):
+        # A model beats the raw id -- "which lane is this on" is a real fact
+        # about the session, unlike an 8-char slice of a directory name.
+        self._agent("abc123", 10, [
+            {"text": "<user_query>go</user_query>"},
+            {"role": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Task",
+                 "input": {"model": "composer-2.5"}}]}},
+        ])
+        row = henhouse.load_cursor_sessions()[0]
+        self.assertEqual(row["name"], "composer-2.5")
+
     def test_the_transcript_query_still_beats_the_header_name(self):
         self._agent("abc123", 10, [
             {"text": "<user_query>port the headers</user_query>"}])

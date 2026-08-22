@@ -1794,10 +1794,16 @@ def load_cursor_sessions(now=None):
             if idle > CURSOR_MAX_IDLE_SECS:
                 continue
             task, model = _cursor_scan_transcript(newest)
+            # Composer title beats everything -- it's what the user (or
+            # Cursor) actually called the session. Failing that, which model
+            # it's running on is still a real fact about the session; the raw
+            # transcript-directory id is the fallback of last resort, since it
+            # names nothing a human would recognize.
+            name = h.get("name") or model or agent.name[:8]
             rows.append({
                 "source": "cursor",
                 "pid": None,
-                "name": h.get("name") or agent.name[:8],
+                "name": name,
                 "sessionId": agent.name,
                 "cwd": cwd,
                 "idle_secs": int(idle),
