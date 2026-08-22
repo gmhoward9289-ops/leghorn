@@ -715,13 +715,23 @@ def draw_header(win, w, rows, total, updated, busy, sort_mode, filt, gh_events=(
         pass
 
 
+# Full legend first, then progressively less-essential hints dropped -- same
+# fallback-chain shape the header uses for its mode labels. "q quit" and
+# "? help" have no other way to be discovered, so they survive every tier;
+# "tab pane" and "enter detail" are guessable (arrow keys/enter are the
+# obvious things to try) and go first.
+KEY_HINT_TIERS = (
+    "q quit  r refresh  s sort  f filter  p speed  c commits  g git  "
+    "tab pane  enter detail  ? help",
+    "q quit  r refresh  s sort  f filter  p speed  c commits  g git  ? help",
+    "q quit  r refresh  s sort  f filter  ? help",
+    "q quit  ? help",
+)
+
+
 def draw_footer(win, h, w, message, updated=0.0, gh_updated=0.0):
-    keys = ("q quit  r refresh  s sort  f filter  p speed  c commits  g git  "
-            "tab pane  enter detail  ? help")
     try:
-        left = (message or keys)[: w - 2]
-        win.addstr(h - 1, 1, left,
-                   cp(C_YELLOW) if message else cp(C_DIM) | curses.A_DIM)
+        stamp = "v" + __version__
         # Data ages, bottom right: sorting and filtering are instant and local,
         # so the only honest question is how old the data itself is.
         ages = []
@@ -730,14 +740,40 @@ def draw_footer(win, h, w, message, updated=0.0, gh_updated=0.0):
         if gh_updated:
             ages.append("gh %s" % cb.ago(time.time() - gh_updated))
         right = " · ".join(ages)
+
+        if message:
+            left = message[: w - 2]
+        else:
+            # Prefer whichever tier is detailed enough to still leave room for
+            # the ages and the version stamp too -- computed the same way the
+            # placement checks below do, so a tier that "fits" here really
+            # does leave both their slots open. Falls back to whatever avoids
+            # truncation once no tier can fit everything; the ages-vs-stamp
+            # priority below still applies from there.
+            left = None
+            for tier in KEY_HINT_TIERS:
+                fits_stamp = len(tier) <= w - len(stamp) - 4
+                fits_both = (not right) or (
+                    w - len(right) - 4 - len(stamp) > len(tier) + 2)
+                if fits_stamp and fits_both:
+                    left = tier
+                    break
+            if left is None:
+                for tier in KEY_HINT_TIERS:
+                    if len(tier) <= w - 2:
+                        left = tier
+                        break
+                else:
+                    left = KEY_HINT_TIERS[-1][: w - 2]
+        win.addstr(h - 1, 1, left,
+                   cp(C_YELLOW) if message else cp(C_DIM) | curses.A_DIM)
         # Version, dim, in the true bottom-right corner -- roost's proven shape,
         # riding whatever the last visible row is so it can never itself be the
         # thing that gets clipped. It stops before the final column (addstr into
         # the last cell wraps onto the next row, see draw_header) and is dropped
-        # whole when fewer than two spare columns remain: the key hints and the
-        # data ages are what the footer is *for*, so neither ever sheds or
-        # truncates mid-word to make room for a version number.
-        stamp = "v" + __version__
+        # whole when fewer than two spare columns remain: the data ages are what
+        # the footer is *for*, so they never shed or truncate mid-word to make
+        # room for a version number -- only the key hints do, above.
         sx = w - 1 - len(stamp)
         room = sx - len(left) - 1  # left starts at column 1, so it ends at len(left)
         if right:
