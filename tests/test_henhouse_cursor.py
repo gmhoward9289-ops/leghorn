@@ -231,6 +231,19 @@ class HeaderEnrichedSessions(unittest.TestCase):
         # No user_query in the transcript, so the composer name is the task.
         self.assertEqual(row["task"], "fix the tap push")
 
+    def test_the_row_name_is_the_composer_title_not_the_raw_id(self):
+        self._agent("abc123", 10, [{"text": "no query here"}])
+        _make_state_db(self.db, [
+            ("abc123", 0, 0, {"name": "fix the tap push"}),
+        ])
+        row = henhouse.load_cursor_sessions()[0]
+        self.assertEqual(row["name"], "fix the tap push")
+
+    def test_no_header_name_falls_back_to_the_truncated_id(self):
+        self._agent("abc12345678", 10, [{"text": "no query here"}])
+        row = henhouse.load_cursor_sessions()[0]
+        self.assertEqual(row["name"], "abc12345")
+
     def test_the_transcript_query_still_beats_the_header_name(self):
         self._agent("abc123", 10, [
             {"text": "<user_query>port the headers</user_query>"}])

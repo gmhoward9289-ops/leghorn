@@ -214,7 +214,9 @@ class Model:
         # Drain the sweep pools too: their worker threads are non-daemon, and
         # the interpreter joins them at exit -- without this a quit pressed
         # mid-sweep holds the shell prompt hostage for the rest of the sweep.
-        cb.CANCEL.set()
+        # cancel_all() kills any git/gh subprocess already in flight rather
+        # than waiting out its timeout, which is what actually bounds this.
+        cb.cancel_all()
         self._wake.set()
         self._gh_wake.set()
 
@@ -490,12 +492,16 @@ def draw_sessions(pane, rows, sel, scroll, use_git):
             col += width + GAP
 
 
-def draw_commits(pane, commits, sel, scroll, focused, compact=False):
+def draw_commits(pane, commits, sel, scroll, focused, compact=False, loading=False):
     """Two lines per commit in the side pane; one line when stacked underneath."""
     body = pane.h - 2
     inner = pane.w - 2
     if not commits:
-        pane.put(0, 1, "no commits found", cp(C_DIM) | curses.A_DIM)
+        # "no commits found" and "still collecting" are different facts -- the
+        # first sweep can take real wall-clock time, and a pane that looks
+        # done when it isn't reads as a stalled or broken dashboard.
+        text = "collecting..." if loading else "no commits found"
+        pane.put(0, 1, text, cp(C_DIM) | curses.A_DIM)
         return
     now = time.time()
     step = 1 if compact else 2
@@ -561,7 +567,7 @@ def github_cells(e):
     return glyph, color, "  ".join(bits), text_color
 
 
-def draw_github(pane, events, warn, sel, scroll, focused):
+def draw_github(pane, events, warn, sel, scroll, focused, loading=False):
     """One line per CI run or open PR, problems pinned at the top."""
     inner = pane.w - 2
     if warn:
@@ -569,7 +575,10 @@ def draw_github(pane, events, warn, sel, scroll, focused):
                  cp(C_YELLOW) | curses.A_DIM)
         return
     if not events:
-        pane.put(0, 1, "no CI runs or open PRs", cp(C_DIM) | curses.A_DIM)
+        # gh_updated stays 0.0 until the first sweep lands, so "loading" here
+        # means "no sweep has completed yet" -- not "definitely nothing open".
+        text = "collecting..." if loading else "no CI runs or open PRs"
+        pane.put(0, 1, text, cp(C_DIM) | curses.A_DIM)
         return
     now = time.time()
     body = pane.h - 2
@@ -863,7 +872,7 @@ def _loop(stdscr, model, args):
 
     while True:
         rows_all, commits, updated, warn, error, loading, busy = model.snapshot()
-        gh_events, gh_warn, _gh_updated = model.snapshot_github()
+        gh_events, gh_warn, gh_updated = model.snapshot_github()
         rows = apply_sort([r for r in rows_all if matches(r, filt)], sort_mode)
 
         h, w = stdscr.getmaxyx()
@@ -891,8 +900,12 @@ def _loop(stdscr, model, args):
         # needs a row per live session, and the rest of the left column sat
         # blank. Sessions get what they need up to two thirds of the column;
         # a warning still earns the pane, because "cannot see github" and
-        # "nothing is happening" must not render identically.
-        have_github = args.github and (gh_events or gh_warn)
+        # "nothing is happening" must not render identically. The pane also
+        # earns its space before the first sweep lands (gh_updated == 0.0):
+        # otherwise it pops into existence mid-session instead of showing
+        # "collecting...", and the layout shifts under the user right when
+        # they're already waiting on something.
+        have_github = args.github and (gh_events or gh_warn or gh_updated == 0.0)
 
         # With commits off there is a whole column free, so the two remaining
         # panes go side by side rather than stacking and leaving the right half
@@ -954,7 +967,7 @@ def _loop(stdscr, model, args):
             gh_sel = max(0, min(gh_sel, len(gh_events) - 1)) if gh_events else 0
             gh_scroll = clamp_scroll(gh_sel, gh_scroll, gh_visible)
             draw_github(gh_pane, gh_events, gh_warn, gh_sel, gh_scroll,
-                        focus == "github")
+                        focus == "github", loading=gh_updated == 0.0)
         elif focus == "github":
             focus = "sessions"
 
@@ -976,7 +989,7 @@ def _loop(stdscr, model, args):
             cvisible = max(1, (pane.h - 2) // cstep)
             commit_scroll = clamp_scroll(commit_sel, commit_scroll, cvisible)
             draw_commits(pane, commits, commit_sel, commit_scroll,
-                         focus == "commits", compact=stacked)
+                         focus == "commits", compact=stacked, loading=loading)
         elif focus == "commits":
             # Same guard the github pane has: never leave focus on a pane the
             # user cannot see, or j/k/enter drive an invisible list.
