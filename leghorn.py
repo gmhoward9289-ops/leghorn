@@ -140,6 +140,12 @@ def init_colors():
         bg = -1
     except curses.error:
         bg = curses.COLOR_BLACK
+    # Plain ANSI blue (index 4) is the one basic color that reads as barely
+    # legible on a black background in most terminal palettes -- ask for the
+    # xterm-256 bright blue (12) where the terminal actually offers it. Every
+    # C_BLUE use also carries A_BOLD (below), which is what makes an 8-color
+    # terminal render the dark variant brighter in the first place.
+    blue = 12 if curses.COLORS >= 16 else curses.COLOR_BLUE
     for pair, fg in (
         (C_DIM, curses.COLOR_WHITE),
         (C_GREEN, curses.COLOR_GREEN),
@@ -147,7 +153,7 @@ def init_colors():
         (C_RED, curses.COLOR_RED),
         (C_CYAN, curses.COLOR_CYAN),
         (C_MAGENTA, curses.COLOR_MAGENTA),
-        (C_BLUE, curses.COLOR_BLUE),
+        (C_BLUE, blue),
     ):
         curses.init_pair(pair, fg, bg)
     curses.init_pair(C_SEL, curses.COLOR_BLACK, curses.COLOR_CYAN)
@@ -366,6 +372,15 @@ class Pane:
         return len(text)
 
 
+def loading_text():
+    """"collecting" with a dot count that cycles 1-2-3 -- a static "collecting..."
+    reads as identical to any other static label, and gets lost against the
+    same dim color used for "nothing here" elsewhere in these panes. The
+    render loop redraws at least every 250ms regardless, so this is visible
+    motion for free rather than an extra timer."""
+    return "collecting" + "." * (int(time.time() * 2) % 3 + 1)
+
+
 GAP = 2
 # Screen order of the session columns, and the width each wants.
 COL_ORDER = ("dot", "name", "project", "branch", "status", "ctx", "git", "age", "task")
@@ -489,7 +504,9 @@ def draw_sessions(pane, rows, sel, scroll, use_git):
             text, color = cells[key]
             text = elide(text, width) if key in ("project", "branch") else text[:width]
             attr = base if selected else cp(color)
-            if key in ("name", "dot"):
+            # project rides the same C_BLUE bump as the repo columns in the
+            # other two panes -- plain blue reads as barely legible on black.
+            if key in ("name", "dot", "project"):
                 attr |= curses.A_BOLD
             elif key in ("branch", "task", "age"):
                 attr |= curses.A_DIM
@@ -505,7 +522,7 @@ def draw_commits(pane, commits, sel, scroll, focused, compact=False, loading=Fal
         # "no commits found" and "still collecting" are different facts -- the
         # first sweep can take real wall-clock time, and a pane that looks
         # done when it isn't reads as a stalled or broken dashboard.
-        text = "collecting..." if loading else "no commits found"
+        text = loading_text() if loading else "no commits found"
         pane.put(0, 1, text, cp(C_DIM) | curses.A_DIM)
         return
     now = time.time()
@@ -530,14 +547,14 @@ def draw_commits(pane, commits, sel, scroll, focused, compact=False, loading=Fal
             # only part that says what actually happened. Repo gets a fixed
             # column, and the branch yields entirely unless the window is wide.
             col += pane.put(top, col, c["repo"][:16].ljust(min(16, inner - col)),
-                            base if selected else cp(C_BLUE))
+                            base if selected else cp(C_BLUE) | curses.A_BOLD)
             if ref and inner - col > 60:
                 col += pane.put(top, col + 2, ref[:14],
                                 base if selected else cp(C_DIM) | curses.A_DIM) + 2
             pane.put(top, col + 2, c["subject"],
                      base if selected else cp(C_DIM) | curses.A_DIM)
             continue
-        col += pane.put(top, col, c["repo"], base if selected else cp(C_BLUE))
+        col += pane.put(top, col, c["repo"], base if selected else cp(C_BLUE) | curses.A_BOLD)
         if ref:
             pane.put(top, col, "  " + ref, base if selected else cp(C_DIM) | curses.A_DIM)
         pane.put(top + 1, 7, c["subject"],
@@ -582,7 +599,7 @@ def draw_github(pane, events, warn, sel, scroll, focused, loading=False):
     if not events:
         # gh_updated stays 0.0 until the first sweep lands, so "loading" here
         # means "no sweep has completed yet" -- not "definitely nothing open".
-        text = "collecting..." if loading else "no CI runs or open PRs"
+        text = loading_text() if loading else "no CI runs or open PRs"
         pane.put(0, 1, text, cp(C_DIM) | curses.A_DIM)
         return
     now = time.time()
@@ -604,7 +621,7 @@ def draw_github(pane, events, warn, sel, scroll, focused, loading=False):
         glyph, gcolor, text, tcolor = github_cells(e)
         col += pane.put(line, col, glyph, base if selected else cp(gcolor) | curses.A_BOLD) + 1
         col += pane.put(line, col, elide(e["repo"], 17).ljust(min(17, max(0, inner - col))),
-                        base if selected else cp(C_BLUE)) + 1
+                        base if selected else cp(C_BLUE) | curses.A_BOLD) + 1
         pane.put(line, col, text, base if selected else cp(tcolor))
     hidden = len(events) - (scroll + body)
     if hidden > 0:
@@ -946,7 +963,7 @@ def _loop(stdscr, model, args):
         scroll = clamp_scroll(sel, scroll, visible)
 
         if loading:
-            sessions.put(0, 1, "collecting...", cp(C_DIM) | curses.A_DIM)
+            sessions.put(0, 1, loading_text(), cp(C_DIM) | curses.A_DIM)
         elif not rows:
             sessions.put(0, 1, "no sessions match filter '%s'" % filt,
                          cp(C_DIM) | curses.A_DIM)

@@ -1657,40 +1657,52 @@ def read_cursor_composer_headers(db_path=None):
     if path is None or not path.is_file():
         return {}
     headers = {}
-    try:
-        uri = "file:%s?mode=ro" % path.resolve().as_posix()
-        con = sqlite3.connect(uri, uri=True, timeout=0.5)
+    # Cursor writes this file constantly with a live fleet -- 0.5s of internal
+    # busy-wait measured "database is locked" on 3 of 5 tries a second apart,
+    # which meant most refreshes silently fell back to {} and every unnamed
+    # session showed its raw transcript-directory hash instead of a real
+    # title. One retry at a longer timeout costs a few seconds in a
+    # background sweep thread; it costs nothing the UI thread waits on.
+    for attempt, timeout in enumerate((2.0, 2.0)):
         try:
-            cur = con.execute(
-                "SELECT composerId, lastUpdatedAt, createdAt, value "
-                "FROM composerHeaders "
-                "WHERE COALESCE(isSubagent, 0) = 0 "
-                "AND COALESCE(isArchived, 0) = 0")
-            for cid, lu, created, val in cur:
-                try:
-                    h = json.loads(val) if val else {}
-                except ValueError:
-                    h = {}
-                if not isinstance(h, dict):
-                    h = {}
-                # Draft empty-state and ephemeral chat composers are noise.
-                if h.get("isDraft") or cid == "empty-state-draft":
-                    continue
-                if h.get("unifiedMode") == "chat" and h.get("isEphemeral"):
-                    continue
-                pct = h.get("contextUsagePercent")
-                headers[cid] = {
-                    "name": (h.get("name") or "").strip() or None,
-                    "subtitle": (h.get("subtitle") or "").strip() or None,
-                    "ctx_pct": float(pct) if isinstance(pct, (int, float)) else None,
-                    "last_write": _cursor_ms_to_epoch(
-                        h.get("lastUpdatedAt") or lu
-                        or h.get("createdAt") or created),
-                }
-        finally:
-            con.close()
+            uri = "file:%s?mode=ro" % path.resolve().as_posix()
+            con = sqlite3.connect(uri, uri=True, timeout=timeout)
+            break
+        except sqlite3.OperationalError:
+            if attempt == 1:
+                return {}
+            time.sleep(0.3)
+    try:
+        cur = con.execute(
+            "SELECT composerId, lastUpdatedAt, createdAt, value "
+            "FROM composerHeaders "
+            "WHERE COALESCE(isSubagent, 0) = 0 "
+            "AND COALESCE(isArchived, 0) = 0")
+        for cid, lu, created, val in cur:
+            try:
+                h = json.loads(val) if val else {}
+            except ValueError:
+                h = {}
+            if not isinstance(h, dict):
+                h = {}
+            # Draft empty-state and ephemeral chat composers are noise.
+            if h.get("isDraft") or cid == "empty-state-draft":
+                continue
+            if h.get("unifiedMode") == "chat" and h.get("isEphemeral"):
+                continue
+            pct = h.get("contextUsagePercent")
+            headers[cid] = {
+                "name": (h.get("name") or "").strip() or None,
+                "subtitle": (h.get("subtitle") or "").strip() or None,
+                "ctx_pct": float(pct) if isinstance(pct, (int, float)) else None,
+                "last_write": _cursor_ms_to_epoch(
+                    h.get("lastUpdatedAt") or lu
+                    or h.get("createdAt") or created),
+            }
     except (sqlite3.Error, OSError, ValueError):
         return {}
+    finally:
+        con.close()
     return headers
 
 
