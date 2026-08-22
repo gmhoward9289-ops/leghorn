@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import sys
+import threading
+import time
 import types
 import unittest
 from pathlib import Path
@@ -79,6 +82,45 @@ class TestCancelDrainsSweeps(unittest.TestCase):
         model.stop()
         self.assertTrue(leghorn.cb.CANCEL.is_set())
         leghorn.cb.CANCEL.clear()
+
+
+class TestCancelKillsInFlight(unittest.TestCase):
+    """CANCEL alone only stops calls that have not started a subprocess yet.
+    cancel_all() must also kill one already blocked in communicate() -- that
+    is the difference between the prompt coming back instantly on quit and
+    coming back only after that call's own timeout (up to GH_TIMEOUT=20s)."""
+
+    def setUp(self):
+        cb.CANCEL.clear()
+
+    def tearDown(self):
+        cb.CANCEL.clear()
+
+    def test_cancel_all_kills_a_call_already_running(self):
+        result = {}
+        started = threading.Event()
+
+        def worker():
+            started.set()
+            result["out"] = cb._run(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                timeout=30)
+
+        t = threading.Thread(target=worker)
+        t.start()
+        started.wait(timeout=5)
+        time.sleep(0.3)  # give the child process time to actually launch
+        cb.cancel_all()
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(),
+                         "cancel_all() did not kill the in-flight subprocess")
+        # kill() makes communicate() return normally, just with a non-zero
+        # code -- _run reports that raw result and leaves "was this killed
+        # vs. a real failure" to the caller, exactly as git()/gh_json()/
+        # gather_git() already do by treating any non-zero code as None.
+        out = result.get("out")
+        self.assertIsNotNone(out)
+        self.assertNotEqual(out.returncode, 0)
 
 
 class TestCursorRestore(unittest.TestCase):

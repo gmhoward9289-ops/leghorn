@@ -77,20 +77,35 @@ class TestGitStateJoin(unittest.TestCase):
     while the dirs henhouse looks up with are native. Unjoined, every git
     column on Windows read as a dash."""
 
+    class _FakePopen:
+        """Stands in for the Popen _run() tracks and kills. communicate()
+        returns the canned (stdout, stderr) pair; kill() is a no-op since
+        nothing here is a real process."""
+
+        def __init__(self, returncode, stdout, stderr):
+            self.returncode = returncode
+            self._stdout, self._stderr = stdout, stderr
+
+        def communicate(self, timeout=None):
+            return self._stdout, self._stderr
+
+        def kill(self):
+            pass
+
     def _gather(self, dirs, toplevel):
         record = {
             "toplevel": toplevel, "staged": 0, "unstaged": 1, "untracked": 0,
             "ahead": 0, "behind": 0, "base": "main", "operation": "",
             "last_subject": "x", "last_ts": None,
         }
-        completed = subprocess.CompletedProcess([], 0, json.dumps([record]), "")
-        real_find, real_run = cb.find_git_roost, subprocess.run
+        stdout = json.dumps([record])
+        real_find, real_popen = cb.find_git_roost, subprocess.Popen
         cb.find_git_roost = lambda: ["git-roost"]
-        cb.subprocess.run = lambda *a, **k: completed
+        cb.subprocess.Popen = lambda *a, **k: self._FakePopen(0, stdout, "")
         try:
             return cb.gather_git(dirs)
         finally:
-            cb.find_git_roost, cb.subprocess.run = real_find, real_run
+            cb.find_git_roost, cb.subprocess.Popen = real_find, real_popen
 
     # An absolute tree in each platform's own spelling, plus the forward-slash
     # form git-roost reports for it. On POSIX the two are identical, which is

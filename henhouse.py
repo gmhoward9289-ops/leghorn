@@ -781,9 +781,58 @@ GIT_TIMEOUT = 5
 # Set by the embedding UI on quit. Executor worker threads are non-daemon and
 # the interpreter joins them at exit, so without this a quit pressed mid-sweep
 # waits out every queued git/gh call -- the prompt comes back seconds late.
-# With it, queued work drains as instant no-ops; only the one call already in
-# flight is waited for, bounded by its own subprocess timeout.
+# With it, queued work drains as instant no-ops -- but a call already inside
+# subprocess.run() when CANCEL flips does not notice a plain Event; that is
+# what _PROCS/cancel_all() below are for.
 CANCEL = threading.Event()
+
+# Every subprocess this module currently has in flight, so cancel_all() can
+# kill them outright instead of waiting out their timeout. A quit pressed
+# mid-sweep used to hold the shell prompt hostage for however long the
+# slowest already-launched git/gh call had left on its clock (up to
+# GH_TIMEOUT=20s) -- CANCEL alone only stops calls that had not started yet.
+_PROCS = set()
+_PROCS_LOCK = threading.Lock()
+
+
+def cancel_all():
+    """Stop future git/gh calls and kill every one already running."""
+    CANCEL.set()
+    with _PROCS_LOCK:
+        procs = list(_PROCS)
+    for p in procs:
+        try:
+            p.kill()
+        except OSError:
+            pass
+
+
+def _run(cmd, cwd=None, timeout=None):
+    """subprocess.run, but the Popen is tracked in _PROCS while it runs so a
+    concurrent cancel_all() can kill() it instead of waiting it out. Returns
+    a CompletedProcess, or None on cancel, spawn failure, or timeout (in which
+    case the process is killed here too, same as subprocess.run would)."""
+    if CANCEL.is_set():
+        return None
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=str(cwd) if cwd else None,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except OSError:
+        return None
+    with _PROCS_LOCK:
+        _PROCS.add(proc)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        return None
+    finally:
+        with _PROCS_LOCK:
+            _PROCS.discard(proc)
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
 
 GIT_WORKERS = 8
 # Field separator for git --format. NUL would be the obvious choice, but it
@@ -793,16 +842,8 @@ SEP = "\x1f"
 
 def git(dirpath, *args):
     """Read-only git in dirpath. None if it is not a repo, fails, or hangs."""
-    if CANCEL.is_set():
-        return None
-    try:
-        out = subprocess.run(
-            ("git", "-C", str(dirpath)) + args,
-            capture_output=True, text=True, timeout=GIT_TIMEOUT,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    if out.returncode != 0:
+    out = _run(("git", "-C", str(dirpath)) + args, timeout=GIT_TIMEOUT)
+    if out is None or out.returncode != 0:
         return None
     return out.stdout.rstrip("\n")
 
@@ -846,11 +887,12 @@ def gather_git(dirs):
     for d in unique:
         cmd += ["--root", d]
     cmd += ["--json", "--depth", "0"]
+    out = _run(cmd, timeout=GIT_ROOST_TIMEOUT)
+    if out is None:
+        return {}
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True,
-                             timeout=GIT_ROOST_TIMEOUT)
         records = json.loads(out.stdout) if out.returncode == 0 else []
-    except (subprocess.TimeoutExpired, OSError, ValueError):
+    except ValueError:
         return {}
 
     now = time.time()
@@ -1003,10 +1045,8 @@ def gh_preflight():
     gh = find_gh()
     if not gh:
         return "gh is not on PATH"
-    try:
-        r = subprocess.run([gh, "auth", "status"], capture_output=True,
-                           text=True, timeout=GH_TIMEOUT)
-    except (subprocess.TimeoutExpired, OSError):
+    r = _run([gh, "auth", "status"], timeout=GH_TIMEOUT)
+    if r is None:
         return "gh auth status did not answer"
     if r.returncode:
         # `gh auth status` reports EVERY configured account; pick the line that
@@ -1024,14 +1064,8 @@ def gh_preflight():
 def gh_json(gh, args, cwd):
     """One gh call parsed as JSON, or None. None, not [] -- a caller merging
     per-repo results must be able to tell 'no PRs' from 'could not ask'."""
-    if CANCEL.is_set():
-        return None
-    try:
-        out = subprocess.run([gh] + args, cwd=str(cwd), capture_output=True,
-                             text=True, timeout=GH_TIMEOUT)
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    if out.returncode != 0:
+    out = _run([gh] + args, cwd=cwd, timeout=GH_TIMEOUT)
+    if out is None or out.returncode != 0:
         return None
     try:
         return json.loads(out.stdout)
@@ -1240,7 +1274,8 @@ def fmt_github(events, warn, width):
     return lines
 
 
-def build(telemetry, claims, occupancy, sessions, use_git=True):
+def build(telemetry, claims, occupancy, sessions, use_git=True,
+          extra_git_dirs=None, git_states_out=None):
     # sessionId -> the directory ccwork last saw it occupying.
     held = {}
     for directory, holders in occupancy.items():
@@ -1296,9 +1331,19 @@ def build(telemetry, claims, occupancy, sessions, use_git=True):
         for r in rows:
             guess = tree_path(r["project"], r["tree"])
             r["git_dir"] = str(guess) if guess and guess.is_dir() else r["dir"]
-        states = gather_git(r["git_dir"] for r in rows)
+        # Cursor rows' dirs ride along in this same git-roost call rather than
+        # spawning a second one in fleet_rows: two sequential subprocess sweeps
+        # doubled the worst-case startup wait (each capped by GIT_ROOST_TIMEOUT)
+        # for no benefit -- git-roost already batches arbitrarily many roots
+        # into one --json scan.
+        dirs = [r["git_dir"] for r in rows]
+        if extra_git_dirs:
+            dirs += list(extra_git_dirs)
+        states = gather_git(dirs)
         for r in rows:
             r["git"] = states.get(r["git_dir"])
+        if git_states_out is not None:
+            git_states_out.update(states)
 
     # Contested is re-derived after Cursor rows are merged (see mark_contested /
     # fleet_rows). The path heuristic here only covers the Claude-only path
@@ -1354,7 +1399,14 @@ def fleet_rows(use_git=True):
     sessions = load_sessions()
     telemetry, warn = load_transcripts(sessions)
     claims, occupancy = load_registry()
-    rows = build(telemetry, claims, occupancy, sessions, use_git=use_git)
+    cursor_sessions = load_cursor_sessions()
+    cursor_dirs = [c["cwd"] for c in cursor_sessions if c.get("cwd")]
+    # One git-roost sweep for both sources -- cursor_dirs rides along in the
+    # same subprocess call build() makes for the Claude rows instead of a
+    # second sequential one, which used to double the worst-case startup wait.
+    git_states = {}
+    rows = build(telemetry, claims, occupancy, sessions, use_git=use_git,
+                 extra_git_dirs=cursor_dirs, git_states_out=git_states)
 
     for r in rows:
         r["source"] = "claude"
@@ -1374,7 +1426,7 @@ def fleet_rows(use_git=True):
             if path:
                 r["task"] = session_topic(path)
 
-    for c in load_cursor_sessions():
+    for c in cursor_sessions:
         project, tree = split_path(c["cwd"])
         rows.append({
             "source": "cursor",
@@ -1394,19 +1446,10 @@ def fleet_rows(use_git=True):
             "subagents_recent": 0,
             "verified": None,
             "contested": False,
-            "git": None,
+            "git": git_states.get(c["cwd"]) if use_git and c.get("cwd") else None,
             "git_dir": c["cwd"] or "",
             "idle_secs": c["idle_secs"],
         })
-
-    if use_git:
-        cursor_dirs = [r["git_dir"] for r in rows
-                       if r.get("source") == "cursor" and r.get("git_dir")]
-        if cursor_dirs:
-            states = gather_git(cursor_dirs)
-            for r in rows:
-                if r.get("source") == "cursor" and r.get("git_dir"):
-                    r["git"] = states.get(r["git_dir"])
 
     mark_contested(rows)
     return rows, warn
@@ -1614,40 +1657,52 @@ def read_cursor_composer_headers(db_path=None):
     if path is None or not path.is_file():
         return {}
     headers = {}
-    try:
-        uri = "file:%s?mode=ro" % path.resolve().as_posix()
-        con = sqlite3.connect(uri, uri=True, timeout=0.5)
+    # Cursor writes this file constantly with a live fleet -- 0.5s of internal
+    # busy-wait measured "database is locked" on 3 of 5 tries a second apart,
+    # which meant most refreshes silently fell back to {} and every unnamed
+    # session showed its raw transcript-directory hash instead of a real
+    # title. One retry at a longer timeout costs a few seconds in a
+    # background sweep thread; it costs nothing the UI thread waits on.
+    for attempt, timeout in enumerate((2.0, 2.0)):
         try:
-            cur = con.execute(
-                "SELECT composerId, lastUpdatedAt, createdAt, value "
-                "FROM composerHeaders "
-                "WHERE COALESCE(isSubagent, 0) = 0 "
-                "AND COALESCE(isArchived, 0) = 0")
-            for cid, lu, created, val in cur:
-                try:
-                    h = json.loads(val) if val else {}
-                except ValueError:
-                    h = {}
-                if not isinstance(h, dict):
-                    h = {}
-                # Draft empty-state and ephemeral chat composers are noise.
-                if h.get("isDraft") or cid == "empty-state-draft":
-                    continue
-                if h.get("unifiedMode") == "chat" and h.get("isEphemeral"):
-                    continue
-                pct = h.get("contextUsagePercent")
-                headers[cid] = {
-                    "name": (h.get("name") or "").strip() or None,
-                    "subtitle": (h.get("subtitle") or "").strip() or None,
-                    "ctx_pct": float(pct) if isinstance(pct, (int, float)) else None,
-                    "last_write": _cursor_ms_to_epoch(
-                        h.get("lastUpdatedAt") or lu
-                        or h.get("createdAt") or created),
-                }
-        finally:
-            con.close()
+            uri = "file:%s?mode=ro" % path.resolve().as_posix()
+            con = sqlite3.connect(uri, uri=True, timeout=timeout)
+            break
+        except sqlite3.OperationalError:
+            if attempt == 1:
+                return {}
+            time.sleep(0.3)
+    try:
+        cur = con.execute(
+            "SELECT composerId, lastUpdatedAt, createdAt, value "
+            "FROM composerHeaders "
+            "WHERE COALESCE(isSubagent, 0) = 0 "
+            "AND COALESCE(isArchived, 0) = 0")
+        for cid, lu, created, val in cur:
+            try:
+                h = json.loads(val) if val else {}
+            except ValueError:
+                h = {}
+            if not isinstance(h, dict):
+                h = {}
+            # Draft empty-state and ephemeral chat composers are noise.
+            if h.get("isDraft") or cid == "empty-state-draft":
+                continue
+            if h.get("unifiedMode") == "chat" and h.get("isEphemeral"):
+                continue
+            pct = h.get("contextUsagePercent")
+            headers[cid] = {
+                "name": (h.get("name") or "").strip() or None,
+                "subtitle": (h.get("subtitle") or "").strip() or None,
+                "ctx_pct": float(pct) if isinstance(pct, (int, float)) else None,
+                "last_write": _cursor_ms_to_epoch(
+                    h.get("lastUpdatedAt") or lu
+                    or h.get("createdAt") or created),
+            }
     except (sqlite3.Error, OSError, ValueError):
         return {}
+    finally:
+        con.close()
     return headers
 
 
@@ -1751,10 +1806,16 @@ def load_cursor_sessions(now=None):
             if idle > CURSOR_MAX_IDLE_SECS:
                 continue
             task, model = _cursor_scan_transcript(newest)
+            # Composer title beats everything -- it's what the user (or
+            # Cursor) actually called the session. Failing that, which model
+            # it's running on is still a real fact about the session; the raw
+            # transcript-directory id is the fallback of last resort, since it
+            # names nothing a human would recognize.
+            name = h.get("name") or model or agent.name[:8]
             rows.append({
                 "source": "cursor",
                 "pid": None,
-                "name": agent.name[:8],
+                "name": name,
                 "sessionId": agent.name,
                 "cwd": cwd,
                 "idle_secs": int(idle),

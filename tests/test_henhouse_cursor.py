@@ -231,6 +231,31 @@ class HeaderEnrichedSessions(unittest.TestCase):
         # No user_query in the transcript, so the composer name is the task.
         self.assertEqual(row["task"], "fix the tap push")
 
+    def test_the_row_name_is_the_composer_title_not_the_raw_id(self):
+        self._agent("abc123", 10, [{"text": "no query here"}])
+        _make_state_db(self.db, [
+            ("abc123", 0, 0, {"name": "fix the tap push"}),
+        ])
+        row = henhouse.load_cursor_sessions()[0]
+        self.assertEqual(row["name"], "fix the tap push")
+
+    def test_no_header_name_falls_back_to_the_truncated_id(self):
+        self._agent("abc12345678", 10, [{"text": "no query here"}])
+        row = henhouse.load_cursor_sessions()[0]
+        self.assertEqual(row["name"], "abc12345")
+
+    def test_no_header_name_but_a_known_model_names_the_lane_instead(self):
+        # A model beats the raw id -- "which lane is this on" is a real fact
+        # about the session, unlike an 8-char slice of a directory name.
+        self._agent("abc123", 10, [
+            {"text": "<user_query>go</user_query>"},
+            {"role": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Task",
+                 "input": {"model": "composer-2.5"}}]}},
+        ])
+        row = henhouse.load_cursor_sessions()[0]
+        self.assertEqual(row["name"], "composer-2.5")
+
     def test_the_transcript_query_still_beats_the_header_name(self):
         self._agent("abc123", 10, [
             {"text": "<user_query>port the headers</user_query>"}])
