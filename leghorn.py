@@ -1183,7 +1183,8 @@ def _loop(stdscr, model, args):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Full-screen live view of Claude Code sessions and git state.")
+        description="Full-screen live view of Claude Code sessions and git state.",
+        epilog="source and issues: https://github.com/gmhoward9289-ops/leghorn")
     ap.add_argument("-i", "--interval", type=float, default=None, metavar="SECS",
                     help="seconds between refreshes (overrides --speed)")
     ap.add_argument("--speed", choices=[s[0] for s in SPEEDS], default=DEFAULT_SPEED,
