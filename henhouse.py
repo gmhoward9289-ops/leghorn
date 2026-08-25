@@ -894,6 +894,11 @@ def gather_git(dirs):
         records = json.loads(out.stdout) if out.returncode == 0 else []
     except ValueError:
         return {}
+    # git-roost 0.6 wraps the records in a {schema, version, trees} envelope;
+    # earlier versions (and --legacy-json) emit the bare list. Accept both, so
+    # whichever git-roost is on the box, the join below sees a list of trees.
+    if isinstance(records, dict):
+        records = records.get("trees") or []
 
     now = time.time()
     by_top = {}
