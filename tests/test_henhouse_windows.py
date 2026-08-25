@@ -92,13 +92,18 @@ class TestGitStateJoin(unittest.TestCase):
         def kill(self):
             pass
 
-    def _gather(self, dirs, toplevel):
+    def _gather(self, dirs, toplevel, envelope=False):
         record = {
             "toplevel": toplevel, "staged": 0, "unstaged": 1, "untracked": 0,
             "ahead": 0, "behind": 0, "base": "main", "operation": "",
             "last_subject": "x", "last_ts": None,
         }
-        stdout = json.dumps([record])
+        if envelope:
+            # git-roost >= 0.6 wraps the list; older ones emit it bare.
+            stdout = json.dumps({"schema": "git-roost.trees.v1",
+                                 "version": "0.6.0", "trees": [record]})
+        else:
+            stdout = json.dumps([record])
         real_find, real_popen = cb.find_git_roost, subprocess.Popen
         cb.find_git_roost = lambda: ["git-roost"]
         cb.subprocess.Popen = lambda *a, **k: self._FakePopen(0, stdout, "")
@@ -125,6 +130,14 @@ class TestGitStateJoin(unittest.TestCase):
         inner = os.path.join(self.NATIVE_ROOT, "packaging")
         states = self._gather([inner], self.REPORTED_ROOT)
         self.assertIsNotNone(states.get(inner))
+
+    def test_git_roost_envelope_shape_is_accepted_too(self):
+        # git-roost 0.6 wraps its records in {schema, version, trees}; the
+        # bare list before it must keep working, so both shapes join.
+        states = self._gather([self.NATIVE_ROOT], self.REPORTED_ROOT,
+                              envelope=True)
+        self.assertIsNotNone(states.get(self.NATIVE_ROOT))
+        self.assertEqual(states[self.NATIVE_ROOT]["dirty"], 1)
 
 
 if __name__ == "__main__":
