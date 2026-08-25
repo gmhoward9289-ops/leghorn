@@ -22,7 +22,8 @@ have actually done, which is the only one of the two that can be wrong.
     henhouse --log -w         # ...live
     henhouse --wide           # don't truncate the task text
     henhouse --no-git         # skip the git columns if they are ever slow
-    henhouse --json           # joined records, for piping somewhere else
+    henhouse --json           # {"schema": "henhouse.session.v1", "rows": [...]}
+    henhouse --legacy-json    # bare list of rows (pre-schema --json shape)
 
 Read-only by construction: it reads transcripts and two state files, and gets
 git facts from `git-roost --json`, which enforces read-only at the argument
