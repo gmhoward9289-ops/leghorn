@@ -81,7 +81,7 @@ Homebrew (macOS and Linux):
 brew install gmhoward9289-ops/tap/leghorn
 ```
 
-npm:
+npm (macOS and Linux only — use pipx on Windows):
 
 ```bash
 npm install -g leghorn
@@ -141,19 +141,15 @@ The data layer is also a command of its own:
 python3 -m henhouse            # one table of sessions, for a hook or a pipe
 python3 -m henhouse --github   # the CI/PR feed as plain text
 python3 -m henhouse --json     # {"schema": "henhouse.session.v1", "rows": [...]}
-python3 -m henhouse --legacy-json  # bare list of rows (pre-schema --json)
+python3 -m henhouse --json --legacy-json  # bare list (pre-v1 shape)
 ```
 
-`--json` used to print a JSON array. That is a break: pipes that assumed a
-list need `--legacy-json`. The wrapper is the [henhouse](https://github.com/gmhoward9289-ops/henhouse)
-session schema; this file remains the vendored parser (no pip dependency).
-
-## Library
-
-The transcript parser is also published as
-[henhouse](https://github.com/gmhoward9289-ops/henhouse) (`from henhouse import
-iter_tool_calls`). This repo keeps a copy so a two-file, stdlib-only install
-does not grow a pip dependency.
+The transcript parsing library lives in the separate
+[henhouse](https://github.com/gmhoward9289-ops/henhouse) PyPI package for
+pytest-session-trace and other tools. Pin recorded sessions in CI with
+[pytest-session-trace](https://github.com/gmhoward9289-ops/pytest-session-trace)
+(`pip install pytest-session-trace`). This repo's `henhouse.py` is the live
+session table only — see `docs/henhouse-ecosystem.md` for how the names relate.
 
 ## Name
 

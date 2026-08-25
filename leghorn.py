@@ -140,6 +140,12 @@ def init_colors():
         bg = -1
     except curses.error:
         bg = curses.COLOR_BLACK
+    # Plain ANSI blue (index 4) is the one basic color that reads as barely
+    # legible on a black background in most terminal palettes -- ask for the
+    # xterm-256 bright blue (12) where the terminal actually offers it. Every
+    # C_BLUE use also carries A_BOLD (below), which is what makes an 8-color
+    # terminal render the dark variant brighter in the first place.
+    blue = 12 if curses.COLORS >= 16 else curses.COLOR_BLUE
     for pair, fg in (
         (C_DIM, curses.COLOR_WHITE),
         (C_GREEN, curses.COLOR_GREEN),
@@ -147,7 +153,7 @@ def init_colors():
         (C_RED, curses.COLOR_RED),
         (C_CYAN, curses.COLOR_CYAN),
         (C_MAGENTA, curses.COLOR_MAGENTA),
-        (C_BLUE, curses.COLOR_BLUE),
+        (C_BLUE, blue),
     ):
         curses.init_pair(pair, fg, bg)
     curses.init_pair(C_SEL, curses.COLOR_BLACK, curses.COLOR_CYAN)
@@ -214,7 +220,9 @@ class Model:
         # Drain the sweep pools too: their worker threads are non-daemon, and
         # the interpreter joins them at exit -- without this a quit pressed
         # mid-sweep holds the shell prompt hostage for the rest of the sweep.
-        cb.CANCEL.set()
+        # cancel_all() kills any git/gh subprocess already in flight rather
+        # than waiting out its timeout, which is what actually bounds this.
+        cb.cancel_all()
         self._wake.set()
         self._gh_wake.set()
 
@@ -248,14 +256,8 @@ class Model:
             self.busy = True
         rows, commits, warn, error = [], [], None, ""
         try:
-            sessions = cb.load_sessions()
-            telemetry, warn = cb.load_transcripts(sessions)
-            claims, occupancy = cb.load_registry()
-            rows = sorted(
-                cb.build(telemetry, claims, occupancy, sessions,
-                         use_git=self.use_git),
-                key=cb.sort_key,
-            )
+            rows, warn = cb.fleet_rows(use_git=self.use_git)
+            rows = sorted(rows, key=cb.sort_key)
             if self.want_commits:
                 commits = cb.commit_feed(COMMIT_LIMIT)
         except Exception as exc:  # a dashboard that dies on one bad repo is useless
@@ -338,9 +340,14 @@ class Pane:
         try:
             self.win.attron(attr)
             self.win.addstr(self.y, self.x, "╭" + "─" * (self.w - 2) + "╮")
-            for row in range(1, self.h - 1):
-                self.win.addstr(self.y + row, self.x, "│")
-                self.win.addstr(self.y + row, self.x + self.w - 1, "│")
+            # vline draws the whole side in one call instead of one addstr per
+            # row -- a tall pane was issuing dozens of Windows Console API
+            # calls a frame just for its two vertical borders, which carries
+            # real per-call overhead there even though each write is one
+            # character.
+            if self.h > 2:
+                self.win.vline(self.y + 1, self.x, "│", self.h - 2)
+                self.win.vline(self.y + 1, self.x + self.w - 1, "│", self.h - 2)
             self.win.addstr(self.y + self.h - 1, self.x,
                             "╰" + "─" * (self.w - 2) + "╯")
             self.win.attroff(attr)
@@ -363,6 +370,15 @@ class Pane:
         except curses.error:
             pass
         return len(text)
+
+
+def loading_text():
+    """"collecting" with a dot count that cycles 1-2-3 -- a static "collecting..."
+    reads as identical to any other static label, and gets lost against the
+    same dim color used for "nothing here" elsewhere in these panes. The
+    render loop redraws at least every 250ms regardless, so this is visible
+    motion for free rather than an extra timer."""
+    return "collecting" + "." * (int(time.time() * 2) % 3 + 1)
 
 
 GAP = 2
@@ -488,7 +504,9 @@ def draw_sessions(pane, rows, sel, scroll, use_git):
             text, color = cells[key]
             text = elide(text, width) if key in ("project", "branch") else text[:width]
             attr = base if selected else cp(color)
-            if key in ("name", "dot"):
+            # project rides the same C_BLUE bump as the repo columns in the
+            # other two panes -- plain blue reads as barely legible on black.
+            if key in ("name", "dot", "project"):
                 attr |= curses.A_BOLD
             elif key in ("branch", "task", "age"):
                 attr |= curses.A_DIM
@@ -496,12 +514,16 @@ def draw_sessions(pane, rows, sel, scroll, use_git):
             col += width + GAP
 
 
-def draw_commits(pane, commits, sel, scroll, focused, compact=False):
+def draw_commits(pane, commits, sel, scroll, focused, compact=False, loading=False):
     """Two lines per commit in the side pane; one line when stacked underneath."""
     body = pane.h - 2
     inner = pane.w - 2
     if not commits:
-        pane.put(0, 1, "no commits found", cp(C_DIM) | curses.A_DIM)
+        # "no commits found" and "still collecting" are different facts -- the
+        # first sweep can take real wall-clock time, and a pane that looks
+        # done when it isn't reads as a stalled or broken dashboard.
+        text = loading_text() if loading else "no commits found"
+        pane.put(0, 1, text, cp(C_DIM) | curses.A_DIM)
         return
     now = time.time()
     step = 1 if compact else 2
@@ -525,14 +547,14 @@ def draw_commits(pane, commits, sel, scroll, focused, compact=False):
             # only part that says what actually happened. Repo gets a fixed
             # column, and the branch yields entirely unless the window is wide.
             col += pane.put(top, col, c["repo"][:16].ljust(min(16, inner - col)),
-                            base if selected else cp(C_BLUE))
+                            base if selected else cp(C_BLUE) | curses.A_BOLD)
             if ref and inner - col > 60:
                 col += pane.put(top, col + 2, ref[:14],
                                 base if selected else cp(C_DIM) | curses.A_DIM) + 2
             pane.put(top, col + 2, c["subject"],
                      base if selected else cp(C_DIM) | curses.A_DIM)
             continue
-        col += pane.put(top, col, c["repo"], base if selected else cp(C_BLUE))
+        col += pane.put(top, col, c["repo"], base if selected else cp(C_BLUE) | curses.A_BOLD)
         if ref:
             pane.put(top, col, "  " + ref, base if selected else cp(C_DIM) | curses.A_DIM)
         pane.put(top + 1, 7, c["subject"],
@@ -567,7 +589,7 @@ def github_cells(e):
     return glyph, color, "  ".join(bits), text_color
 
 
-def draw_github(pane, events, warn, sel, scroll, focused):
+def draw_github(pane, events, warn, sel, scroll, focused, loading=False):
     """One line per CI run or open PR, problems pinned at the top."""
     inner = pane.w - 2
     if warn:
@@ -575,7 +597,10 @@ def draw_github(pane, events, warn, sel, scroll, focused):
                  cp(C_YELLOW) | curses.A_DIM)
         return
     if not events:
-        pane.put(0, 1, "no CI runs or open PRs", cp(C_DIM) | curses.A_DIM)
+        # gh_updated stays 0.0 until the first sweep lands, so "loading" here
+        # means "no sweep has completed yet" -- not "definitely nothing open".
+        text = loading_text() if loading else "no CI runs or open PRs"
+        pane.put(0, 1, text, cp(C_DIM) | curses.A_DIM)
         return
     now = time.time()
     body = pane.h - 2
@@ -596,7 +621,7 @@ def draw_github(pane, events, warn, sel, scroll, focused):
         glyph, gcolor, text, tcolor = github_cells(e)
         col += pane.put(line, col, glyph, base if selected else cp(gcolor) | curses.A_BOLD) + 1
         col += pane.put(line, col, elide(e["repo"], 17).ljust(min(17, max(0, inner - col))),
-                        base if selected else cp(C_BLUE)) + 1
+                        base if selected else cp(C_BLUE) | curses.A_BOLD) + 1
         pane.put(line, col, text, base if selected else cp(tcolor))
     hidden = len(events) - (scroll + body)
     if hidden > 0:
@@ -690,13 +715,23 @@ def draw_header(win, w, rows, total, updated, busy, sort_mode, filt, gh_events=(
         pass
 
 
+# Full legend first, then progressively less-essential hints dropped -- same
+# fallback-chain shape the header uses for its mode labels. "q quit" and
+# "? help" have no other way to be discovered, so they survive every tier;
+# "tab pane" and "enter detail" are guessable (arrow keys/enter are the
+# obvious things to try) and go first.
+KEY_HINT_TIERS = (
+    "q quit  r refresh  s sort  f filter  p speed  c commits  g git  "
+    "tab pane  enter detail  ? help",
+    "q quit  r refresh  s sort  f filter  p speed  c commits  g git  ? help",
+    "q quit  r refresh  s sort  f filter  ? help",
+    "q quit  ? help",
+)
+
+
 def draw_footer(win, h, w, message, updated=0.0, gh_updated=0.0):
-    keys = ("q quit  r refresh  s sort  f filter  p speed  c commits  g git  "
-            "tab pane  enter detail  ? help")
     try:
-        left = (message or keys)[: w - 2]
-        win.addstr(h - 1, 1, left,
-                   cp(C_YELLOW) if message else cp(C_DIM) | curses.A_DIM)
+        stamp = "v" + __version__
         # Data ages, bottom right: sorting and filtering are instant and local,
         # so the only honest question is how old the data itself is.
         ages = []
@@ -705,14 +740,40 @@ def draw_footer(win, h, w, message, updated=0.0, gh_updated=0.0):
         if gh_updated:
             ages.append("gh %s" % cb.ago(time.time() - gh_updated))
         right = " · ".join(ages)
+
+        if message:
+            left = message[: w - 2]
+        else:
+            # Prefer whichever tier is detailed enough to still leave room for
+            # the ages and the version stamp too -- computed the same way the
+            # placement checks below do, so a tier that "fits" here really
+            # does leave both their slots open. Falls back to whatever avoids
+            # truncation once no tier can fit everything; the ages-vs-stamp
+            # priority below still applies from there.
+            left = None
+            for tier in KEY_HINT_TIERS:
+                fits_stamp = len(tier) <= w - len(stamp) - 4
+                fits_both = (not right) or (
+                    w - len(right) - 4 - len(stamp) > len(tier) + 2)
+                if fits_stamp and fits_both:
+                    left = tier
+                    break
+            if left is None:
+                for tier in KEY_HINT_TIERS:
+                    if len(tier) <= w - 2:
+                        left = tier
+                        break
+                else:
+                    left = KEY_HINT_TIERS[-1][: w - 2]
+        win.addstr(h - 1, 1, left,
+                   cp(C_YELLOW) if message else cp(C_DIM) | curses.A_DIM)
         # Version, dim, in the true bottom-right corner -- roost's proven shape,
         # riding whatever the last visible row is so it can never itself be the
         # thing that gets clipped. It stops before the final column (addstr into
         # the last cell wraps onto the next row, see draw_header) and is dropped
-        # whole when fewer than two spare columns remain: the key hints and the
-        # data ages are what the footer is *for*, so neither ever sheds or
-        # truncates mid-word to make room for a version number.
-        stamp = "v" + __version__
+        # whole when fewer than two spare columns remain: the data ages are what
+        # the footer is *for*, so they never shed or truncate mid-word to make
+        # room for a version number -- only the key hints do, above.
         sx = w - 1 - len(stamp)
         room = sx - len(left) - 1  # left starts at column 1, so it ends at len(left)
         if right:
@@ -736,17 +797,22 @@ def draw_footer(win, h, w, message, updated=0.0, gh_updated=0.0):
 
 def detail_lines(r):
     g = r.get("git") or {}
+    src = r.get("source") or "claude"
+    if r.get("pid") is None:
+        session = "%s  (%s)" % (r["name"], src)
+    else:
+        session = "%s  (pid %d · %s)" % (r["name"], r["pid"], src)
     lines = [
-        ("session", "%s  (pid %d)" % (r["name"], r["pid"])),
+        ("session", session),
         ("status", "%s%s" % (r["status"],
-                             "  · %d subagent(s)" % r["subagents"] if r["subagents"] else "")),
+                             "  · %d subagent(s)" % r["subagents"] if r.get("subagents") else "")),
         ("context", "%s" % (("%.0f%%" % r["context_pct"]) if isinstance(
             r["context_pct"], (int, float)) else "-")),
         ("cost", ("$%.2f" % r["cost_usd"]) if isinstance(r["cost_usd"], (int, float)) else "-"),
         ("project", "%s / %s" % (r["project"], r["tree"] or "-")),
         ("branch", r["branch"] or "-"),
         ("directory", r["git_dir"] or r["dir"] or "-"),
-        ("located by", r["located_by"]),
+        ("located by", r.get("located_by") or "-"),
     ]
     if g:
         lines += [
@@ -864,7 +930,7 @@ def _loop(stdscr, model, args):
 
     while True:
         rows_all, commits, updated, warn, error, loading, busy = model.snapshot()
-        gh_events, gh_warn, _gh_updated = model.snapshot_github()
+        gh_events, gh_warn, gh_updated = model.snapshot_github()
         rows = apply_sort([r for r in rows_all if matches(r, filt)], sort_mode)
 
         h, w = stdscr.getmaxyx()
@@ -892,8 +958,12 @@ def _loop(stdscr, model, args):
         # needs a row per live session, and the rest of the left column sat
         # blank. Sessions get what they need up to two thirds of the column;
         # a warning still earns the pane, because "cannot see github" and
-        # "nothing is happening" must not render identically.
-        have_github = args.github and (gh_events or gh_warn)
+        # "nothing is happening" must not render identically. The pane also
+        # earns its space before the first sweep lands (gh_updated == 0.0):
+        # otherwise it pops into existence mid-session instead of showing
+        # "collecting...", and the layout shifts under the user right when
+        # they're already waiting on something.
+        have_github = args.github and (gh_events or gh_warn or gh_updated == 0.0)
 
         # With commits off there is a whole column free, so the two remaining
         # panes go side by side rather than stacking and leaving the right half
@@ -929,7 +999,7 @@ def _loop(stdscr, model, args):
         scroll = clamp_scroll(sel, scroll, visible)
 
         if loading:
-            sessions.put(0, 1, "collecting...", cp(C_DIM) | curses.A_DIM)
+            sessions.put(0, 1, loading_text(), cp(C_DIM) | curses.A_DIM)
         elif not rows:
             sessions.put(0, 1, "no sessions match filter '%s'" % filt,
                          cp(C_DIM) | curses.A_DIM)
@@ -955,7 +1025,7 @@ def _loop(stdscr, model, args):
             gh_sel = max(0, min(gh_sel, len(gh_events) - 1)) if gh_events else 0
             gh_scroll = clamp_scroll(gh_sel, gh_scroll, gh_visible)
             draw_github(gh_pane, gh_events, gh_warn, gh_sel, gh_scroll,
-                        focus == "github")
+                        focus == "github", loading=gh_updated == 0.0)
         elif focus == "github":
             focus = "sessions"
 
@@ -977,7 +1047,7 @@ def _loop(stdscr, model, args):
             cvisible = max(1, (pane.h - 2) // cstep)
             commit_scroll = clamp_scroll(commit_sel, commit_scroll, cvisible)
             draw_commits(pane, commits, commit_sel, commit_scroll,
-                         focus == "commits", compact=stacked)
+                         focus == "commits", compact=stacked, loading=loading)
         elif focus == "commits":
             # Same guard the github pane has: never leave focus on a pane the
             # user cannot see, or j/k/enter drive an invisible list.
@@ -987,7 +1057,7 @@ def _loop(stdscr, model, args):
                     gh_events, speed)
         note = message or error or (
             "%s -- status and context unavailable" % warn if warn else "")
-        draw_footer(stdscr, h, w, note, updated, _gh_updated)
+        draw_footer(stdscr, h, w, note, updated, gh_updated)
 
         if modal == "help":
             overlay(stdscr, h, w, "HELP", HELP, "any key to close")
@@ -1113,7 +1183,8 @@ def _loop(stdscr, model, args):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Full-screen live view of Claude Code sessions and git state.")
+        description="Full-screen live view of Claude Code sessions and git state.",
+        epilog="source and issues: https://github.com/gmhoward9289-ops/leghorn")
     ap.add_argument("-i", "--interval", type=float, default=None, metavar="SECS",
                     help="seconds between refreshes (overrides --speed)")
     ap.add_argument("--speed", choices=[s[0] for s in SPEEDS], default=DEFAULT_SPEED,

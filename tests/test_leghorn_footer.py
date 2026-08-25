@@ -2,13 +2,15 @@
 """Tests for the footer's version stamp, modeled on roost's paint() tests.
 
 The stamp is a dim v<version> in the true bottom-right corner of the last
-visible row. Three things must hold, in roost's words: it rides whatever the
-last row is, so it can never itself be the thing that gets clipped; it stops
-before the final column, because addstr into the last cell wraps onto the next
-row and the stray character sticks on a pane border (see draw_header); and it
-is dropped whole rather than wrapped or collided when fewer than two spare
-columns remain -- the key hints and the data ages are what the footer is for,
-so neither may shed or truncate mid-word to make room for a version number.
+visible row. It rides whatever the last row is, so it can never itself be the
+thing that gets clipped; it stops before the final column, because addstr into
+the last cell wraps onto the next row and the stray character sticks on a pane
+border (see draw_header); and the key hints shed their least-essential entries
+first (same fallback-chain shape the header uses for its mode labels) to make
+room for it before it is ever dropped whole. The data ages never shed or
+truncate mid-word for it, though -- "how old is this data" is the one fact a
+wall display must keep -- so the stamp is still the thing that goes if even
+the narrowest hint tier and the ages cannot both fit.
 """
 
 from __future__ import annotations
@@ -92,16 +94,33 @@ class FooterStampTest(unittest.TestCase):
         attr = next(a for _, _, t, a in win.calls if t == self.STAMP)
         self.assertEqual(attr, (lg.C_DIM << 20) | curses.A_DIM)
 
-    def test_dropped_rather_than_truncating_the_hints(self):
-        """At 80 columns the key hints fill the footer. The stamp must vanish
-        whole -- not clip the hints mid-word, not write past the edge, where a
-        wrapped line would scroll the display."""
+    def test_hints_shrink_before_the_stamp_is_dropped(self):
+        """At 80 columns the full key-hint legend would fill the footer, but
+        the hints shed their least-essential entries first (same shape as the
+        header's mode-label fallback) rather than sacrifice the stamp -- and
+        never clip a hint mid-word doing it."""
         win = self._footer(80, updated=time.time())
         row = win.row(23)
-        self.assertNotIn(self.STAMP, row)
+        self.assertIn(self.STAMP, row)
         self.assertIn("q quit", row)
+        self.assertIn("? help", row)
+        # The full legend's "tab pane" is the first thing shed -- proves the
+        # hints actually shrank rather than the stamp squeezing in somehow.
+        self.assertNotIn("tab pane", row)
         for _, x, text, _ in win.calls:
             self.assertLessEqual(x + len(text), 79)
+
+    def test_stamp_drops_only_once_no_tier_leaves_it_room(self):
+        """Even the narrowest hint tier ("q quit  ? help") cannot always
+        leave room once the ages are shown too -- at that point the stamp is
+        the thing that goes, not a truncated or colliding hint."""
+        win = self._footer(40, h=10, updated=time.time())
+        row = win.row(9)
+        self.assertNotIn(self.STAMP, row)
+        self.assertIn("q quit", row)
+        self.assertIn("? help", row)
+        for _, x, text, _ in win.calls:
+            self.assertLessEqual(x + len(text), 39)
 
     def test_ages_outrank_the_stamp_when_only_one_fits(self):
         """"How old is this data" is the one fact a wall display must keep
