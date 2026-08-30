@@ -1,6 +1,6 @@
 {
   "name": "leghorn",
-  "version": "0.4.14",
+  "version": "0.4.15",
   "description": "Full-screen live view of every Claude Code session, its git state, and your GitHub CI",
   "keywords": [
     "claude",
