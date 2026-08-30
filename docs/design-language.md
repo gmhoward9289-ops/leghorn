@@ -21,7 +21,8 @@ color or glyph below.
    found`). Failures get a labelled warning line. A pane that cannot know
    something says so; it never sits quietly looking up to date.
 2. **Silent truncation is a lie.** Any list cut short ends with an explicit,
-   attention-colored notice: `… N more below`.
+   attention-colored notice that names the way to the rest: `… N more below
+   (j)`. Cell-level cuts get a marker too (`~`) where the dialect has one.
 3. **A wall display must always answer "when did this last update."** The
    clock and the data ages are the last things a header or footer sheds under
    width pressure — before mode labels, before the version stamp.
@@ -45,7 +46,28 @@ color or glyph below.
 10. **Read-only by construction** for anything that watches other tools' state.
 11. **Inherit the terminal's theme.** No hex values in a TUI — foreground
     roles on the terminal's own background, so the product looks native in
-    every palette the user already chose.
+    every palette the user already chose. Honor `NO_COLOR`; wherever possible
+    derive color from a colorless marker already on the line, so the display
+    reads the same story without it.
+12. **A number whose denominator changed must say so.** A filtered view
+    renders `7 of 41 tree(s) [filter: uncommitted]`, and fleet-wide counts
+    are computed over the unfiltered fleet — a count must never silently
+    change meaning.
+13. **Attention has a grace period.** A signal that is real but young is
+    listed quietly; only past a stated age does it take the attention color.
+    Anything contested or failing is loud from frame one. This is what keeps
+    an attention color from becoming wallpaper.
+14. **Loading is stable.** Cells fill in place in discovery order — a loading
+    table must not regroup rows as results land. And loading *animates*,
+    on interactive surfaces only: one-shot/pipe output stays byte-stable so
+    it can be snapshot-tested.
+15. **One problem, one row.** N instances of the same underlying problem
+    (three sessions in one contested tree) collapse into one ranked row, and
+    a count that aggregates carries its worst age: `3 need you (12m)`.
+16. **"Unseen" is not "down."** A source that was never configured or never
+    answered here renders as a dim unknown (`off?`), distinct from a failure
+    that was up and stopped answering (`DOWN`). Unknown must not collapse
+    into either ok or failure.
 
 ## Semantic color roles
 
@@ -91,11 +113,29 @@ Notes that carry meaning beyond hue:
 Pipe-safe surfaces (plain CLIs, `--json` companions) use ASCII only:
 `+staged ~dirty ?untracked`, `^ahead vbehind`, `=` for clean.
 
+### Two dialects, one vocabulary
+
+The flock ships in two glyph dialects, both conforming:
+
+- **Unicode dialect** (leghorn): the full table above, plus rounded frames.
+- **ASCII dialect** (legbar, roost, git-roost): the pipe-safe set everywhere,
+  `...` for elision, `[###---]` bars — a stated position, not drift; block
+  drawing and dot glyphs mojibake in the Windows console these tools live in.
+
+A product picks one dialect and holds it everywhere — a lone `…` in an
+otherwise ASCII file violates its own stance. The *semantics* (what a glyph
+slot means, what color it takes) are shared across dialects; only the
+codepoints differ.
+
 ## Chrome
 
-- **Frame:** rounded light box drawing (`╭─╮ │ ╰─╯`) in chrome color; bold
-  border when focused, dim when not — focus is signalled purely by border
-  weight. Title inset two columns, uppercase, padded: `╭─ SESSIONS ─…`.
+- **Frame** (multi-pane products): rounded light box drawing (`╭─╮ │ ╰─╯`) in
+  chrome color; bold border when focused, dim when not — focus is signalled
+  purely by border weight. Title inset two columns, uppercase, padded:
+  `╭─ SESSIONS ─…`. Single-pane and ASCII-dialect products render the same
+  slot as a bold uppercase title (plus a rule where one helps); focus, where
+  it exists, is a marker or reverse-video row, and reverse must be re-armed
+  after every inner reset.
 - **Header:** product name in chrome bold at column 1, `·`-separated stat
   chips, right-aligned modes and clock. Sheds fields in a fixed order; the
   clock goes last.
@@ -105,7 +145,12 @@ Pipe-safe surfaces (plain CLIs, `--json` companions) use ASCII only:
 - **Overlays:** centered modal reusing the pane frame, right-justified chrome
   labels, dim `any key to close`.
 - **Never write into the last column.** A glyph in the final cell wraps onto
-  the next row's border and persists.
+  the next row's border and persists. In SGR-dialect products, enforce this
+  with a visible-length primitive (`visible_len`/`clip_ansi`) — `len()` on a
+  colored string is the recurring bug.
+- **Chrome must not move when it changes.** A mode indicator keeps a fixed
+  width in every state (`ARMED` / `off  `), so a state flip never reflows the
+  line around it.
 
 ## Text conventions
 
@@ -126,10 +171,18 @@ Pipe-safe surfaces (plain CLIs, `--json` companions) use ASCII only:
 A product conforms when:
 
 - [ ] All six semantic roles map as above, and no color is used outside its role.
-- [ ] The glyph vocabulary matches, including the ASCII set on pipe-safe output.
-- [ ] Frames are rounded, titles uppercase and inset, focus = border weight.
-- [ ] Loading, empty, and failed states are three visibly different things.
-- [ ] Truncated lists end in an attention-colored `… N more` notice.
+- [ ] The glyph vocabulary matches the product's declared dialect (Unicode or
+      ASCII), held consistently everywhere, with the ASCII set on pipe-safe
+      output.
+- [ ] Titles are uppercase; multi-pane products frame with rounded box drawing
+      and signal focus by border weight; flat products use bold titles and a
+      marked or reversed row.
+- [ ] Loading, empty, and failed states are three visibly different things,
+      and loading fills in place without regrouping.
+- [ ] Truncated lists end in an attention-colored `… N more` notice that
+      names the key or remedy that reaches the rest.
+- [ ] Filtered counts state both numerators; aggregate counts carry their
+      worst age.
 - [ ] Header and footer degrade in a designed order; quit and help hints
       survive every tier; the clock and data ages survive everything.
 - [ ] Ages use the `45s/12m/3h/2d` format.
