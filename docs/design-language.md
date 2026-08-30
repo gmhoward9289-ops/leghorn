@@ -113,27 +113,35 @@ Notes that carry meaning beyond hue:
 Pipe-safe surfaces (plain CLIs, `--json` companions) use ASCII only:
 `+staged ~dirty ?untracked`, `^ahead vbehind`, `=` for clean.
 
-### Two dialects, one vocabulary
+### Two dialects, one vocabulary — chosen by the terminal, not the product
 
-The flock ships in two glyph dialects, both conforming:
+The vocabulary ships in two glyph dialects. Which one renders is a runtime
+capability decision, the same way color inherits the terminal's theme:
 
-- **Unicode dialect** (leghorn): the full table above, plus rounded frames.
-- **ASCII dialect** (legbar, roost, git-roost): the pipe-safe set everywhere,
-  `...` for elision, `[###---]` bars — a stated position, not drift; block
-  drawing and dot glyphs mojibake in the Windows console these tools live in.
+- **Unicode dialect**: the full table above, plus rounded frames — the
+  preferred rendering wherever it can display.
+- **ASCII dialect**: the pipe-safe set everywhere, `...` for elision,
+  `[###---]` bars — the fallback, and *always* the dialect of pipe-safe
+  output (`--once`, `--json`, anything non-interactive).
 
-A product picks one dialect and holds it everywhere — a lone `…` in an
-otherwise ASCII file violates its own stance. The *semantics* (what a glyph
-slot means, what color it takes) are shared across dialects; only the
-codepoints differ.
+At startup an interactive surface probes its terminal — a UTF-8 stdout
+encoding is the signal; the legacy-codepage Windows console fails it and gets
+ASCII — and holds the answer for the whole session. The historical
+"block drawing mojibakes on Windows" stance in the siblings was about that
+legacy console; Windows Terminal renders the Unicode tier correctly, as
+leghorn demonstrates daily on the same machines. A frame must never mix
+dialects — a lone `…` in an ASCII frame is a bug. The *semantics* (what a
+glyph slot means, what color it takes) are identical across dialects; only
+the codepoints differ.
 
 ## Chrome
 
 - **Frame** (multi-pane products): rounded light box drawing (`╭─╮ │ ╰─╯`) in
   chrome color; bold border when focused, dim when not — focus is signalled
   purely by border weight. Title inset two columns, uppercase, padded:
-  `╭─ SESSIONS ─…`. Single-pane and ASCII-dialect products render the same
-  slot as a bold uppercase title (plus a rule where one helps); focus, where
+  `╭─ SESSIONS ─…`. Single-pane layouts, and any surface rendering the ASCII
+  fallback, draw the same slot as a bold uppercase title (plus a rule where
+  one helps); focus, where
   it exists, is a marker or reverse-video row, and reverse must be re-armed
   after every inner reset.
 - **Header:** product name in chrome bold at column 1, `·`-separated stat
@@ -171,12 +179,12 @@ codepoints differ.
 A product conforms when:
 
 - [ ] All six semantic roles map as above, and no color is used outside its role.
-- [ ] The glyph vocabulary matches the product's declared dialect (Unicode or
-      ASCII), held consistently everywhere, with the ASCII set on pipe-safe
-      output.
+- [ ] The Unicode dialect renders on UTF-8-capable interactive terminals,
+      falling back to ASCII elsewhere; pipe-safe output is always ASCII; no
+      frame ever mixes dialects.
 - [ ] Titles are uppercase; multi-pane products frame with rounded box drawing
-      and signal focus by border weight; flat products use bold titles and a
-      marked or reversed row.
+      and signal focus by border weight; flat layouts and the ASCII fallback
+      use bold titles and a marked or reversed row.
 - [ ] Loading, empty, and failed states are three visibly different things,
       and loading fills in place without regrouping.
 - [ ] Truncated lists end in an attention-colored `… N more` notice that
