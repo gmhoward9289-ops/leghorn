@@ -367,10 +367,13 @@ jobs:
   # refresh is exactly how roost's v0.2 tarball once shipped from a formula
   # that still read 0.2 and passed its own version assertion anyway.
   #
-  # One-time setup this job depends on and cannot do for itself: a
-  # TAP_PUSH_TOKEN secret on this repo -- a fine-grained PAT scoped to
-  # gmhoward9289-ops/homebrew-tap with Contents: Read and write. The default
-  # GITHUB_TOKEN only carries permission inside this repo, not a second one.
+  # One-time setup this job depends on and cannot do for itself: APP_ID and
+  # APP_PRIVATE_KEY secrets on this repo, for the swamplink-release-bot GitHub
+  # App, installed on both this repo and gmhoward9289-ops/homebrew-tap. The
+  # default GITHUB_TOKEN only carries permission inside this repo, not a second
+  # one. The App replaced a fine-grained PAT: installation tokens are minted
+  # per run and live an hour, so there is no expiry to track and nothing to
+  # rotate -- a PAT here silently expired and stopped releases for a week.
   homebrew-tap:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
@@ -381,13 +384,24 @@ jobs:
         with:
           path: src
 
+      - name: Mint a GitHub App token for the tap
+        id: tap-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: gmhoward9289-ops
+          repositories: |
+            leghorn
+            homebrew-tap
+
       - name: Check out the tap
         uses: actions/checkout@v7
         with:
           repository: gmhoward9289-ops/homebrew-tap
           ref: master
           path: tap
-          token: ${{ secrets.TAP_PUSH_TOKEN }}
+          token: ${{ steps.tap-token.outputs.token }}
 
       - uses: actions/download-artifact@v8
         with:

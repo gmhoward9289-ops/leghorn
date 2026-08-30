@@ -27,10 +27,17 @@ jobs:
   release-if-changed:
     runs-on: ubuntu-latest
     steps:
+      - name: Mint a GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_PUSH_TOKEN || github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           persist-credentials: true
 
       - uses: actions/setup-python@v7
@@ -95,8 +102,10 @@ jobs:
             git push origin HEAD:main
           fi
           # This tag push fires release.yml on its own, because it goes out as
-          # RELEASE_PUSH_TOKEN rather than GITHUB_TOKEN -- a PAT-pushed tag does
-          # trigger other workflows, where a GITHUB_TOKEN-pushed one does not.
+          # a GitHub App installation token rather than GITHUB_TOKEN -- an App
+          # token triggers other workflows, where a GITHUB_TOKEN-pushed one does
+          # not. (This used to be a PAT, which behaved the same way; the App
+          # replaced it so there is no expiry to track.)
           # There used to be an explicit `gh workflow run release.yml` step here
           # to work around that, and once the PAT landed it started producing a
           # second concurrent pipeline for every release: two identical runs
