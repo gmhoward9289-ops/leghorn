@@ -385,10 +385,47 @@ def loading_text():
 
 
 GAP = 2
-# Screen order of the session columns, and the width each wants.
+# Screen order of the session columns, and the MOST width each may claim.
+# These are ceilings, not fixed widths: a column is drawn only as wide as its
+# widest current cell (see ColumnFitter), so short names no longer leave a
+# dead gutter the size of the longest name the column could ever hold.
 COL_ORDER = ("dot", "name", "project", "branch", "status", "ctx", "git", "age", "task")
 COL_WIDTH = {"dot": 1, "name": 11, "project": 19, "branch": 14,
              "status": 11, "ctx": 5, "git": 9, "age": 4, "task": 10}
+
+# How many frames of content history a column width remembers. Widths fit to
+# content, but content churns every refresh -- a column that snapped narrower
+# the instant its widest row scrolled off would make the whole table dance.
+# Growing is immediate; shrinking waits until the wider content has been gone
+# for this many frames (~10s at the 250ms input timeout).
+FIT_MEMORY = 40
+
+
+class ColumnFitter:
+    """Content-fitted column widths with hysteresis.
+
+    fit() returns the width a column should be drawn at: the widest content
+    seen for it over the last FIT_MEMORY calls, capped at the column's
+    ceiling. Growth applies on the very next frame; shrinking only once the
+    wider rows have stayed gone for the whole memory window, so widths are
+    stable frame-to-frame while rows churn.
+    """
+
+    def __init__(self, memory=FIT_MEMORY):
+        self.memory = memory
+        self._history = {}  # key -> list of recent (capped) natural widths
+
+    def fit(self, key, natural, cap):
+        natural = max(1, min(natural, cap))
+        hist = self._history.setdefault(key, [])
+        hist.append(natural)
+        if len(hist) > self.memory:
+            del hist[: len(hist) - self.memory]
+        return max(hist)
+
+
+# One shared fitter for the whole screen; keys are namespaced per pane.
+FITTER = ColumnFitter()
 
 
 def elide(text, width):
@@ -416,8 +453,16 @@ COL_OPTIONAL = ("branch", "age")
 TASK_COMFORT = 24
 
 
-def session_layout(inner_w, use_git):
-    """key -> width for one session row, fitted to the space actually available."""
+def session_layout(inner_w, use_git, widths=None):
+    """key -> width for one session row, fitted to the space actually available.
+
+    widths gives each fixed column's bid (content-fitted, from fitted_widths);
+    absent, the COL_WIDTH ceilings are used. The bidding order, the task
+    column's comfort claim and its leftover grab are unchanged -- fitting only
+    shrinks what the fixed columns ask for, which leaves the leftovers larger.
+    """
+    if widths is None:
+        widths = COL_WIDTH
     chosen, used = {}, 0
 
     def take(key, width):
@@ -432,19 +477,29 @@ def session_layout(inner_w, use_git):
     for key in COL_CORE:
         if key == "git" and not use_git:
             continue
-        take(key, COL_WIDTH[key])
+        take(key, widths[key])
     # Claim a readable task column before the optional ones bid for the same
     # space: a 12-character claim is noise, and branch is the cheaper thing to lose.
     take("task", TASK_COMFORT) or take("task", COL_WIDTH["task"])
     for key in COL_OPTIONAL:
-        take(key, COL_WIDTH[key])
+        take(key, widths[key])
     # Leftovers go to the task -- the only column never complete at any width.
     if "task" in chosen:
         chosen["task"] += inner_w - used
     return chosen
 
 
-def session_cells(r, layout, use_git):
+def fitted_widths(cell_rows, fitter):
+    """key -> content-fitted width bid, over every row (not just the visible
+    ones, so scrolling never reflows the table)."""
+    widths = {}
+    for key in COL_ORDER:
+        widest = max((len(cells[key][0]) for cells in cell_rows), default=1)
+        widths[key] = fitter.fit("sessions." + key, widest, COL_WIDTH[key])
+    return widths
+
+
+def session_cells(r, use_git):
     """key -> (text, colour) for the columns this layout kept."""
     g = r.get("git") or {}
     loc = r["project"]
@@ -482,23 +537,24 @@ def session_cells(r, layout, use_git):
     }
 
 
-def draw_sessions(pane, rows, sel, scroll, use_git):
+def draw_sessions(pane, rows, sel, scroll, use_git, fitter=None):
     """One line per session, roost-style: it has to survive an 80-column window."""
     body = pane.h - 2
     inner = pane.w - 2
-    layout = session_layout(inner, use_git)
+    cell_rows = [session_cells(r, use_git) for r in rows]
+    layout = session_layout(inner, use_git,
+                            fitted_widths(cell_rows, fitter or FITTER))
 
     for i in range(scroll, len(rows)):
         line = i - scroll
         if line >= body:
             break
-        r = rows[i]
         selected = i == sel
         base = cp(C_SEL) if selected else 0
         if selected:
             pane.put(line, 0, " " * inner, base)
 
-        cells = session_cells(r, layout, use_git)
+        cells = cell_rows[i]
         col = 0
         for key in COL_ORDER:
             if key not in layout:
@@ -517,7 +573,11 @@ def draw_sessions(pane, rows, sel, scroll, use_git):
             col += width + GAP
 
 
-def draw_commits(pane, commits, sel, scroll, focused, loading=False):
+COMMIT_REPO_MAX = 14
+GITHUB_REPO_MAX = 17
+
+
+def draw_commits(pane, commits, sel, scroll, focused, loading=False, fitter=None):
     """One line per commit: age, repo, subject.
 
     The subject is the only part that says what happened, so everything else
@@ -535,6 +595,10 @@ def draw_commits(pane, commits, sel, scroll, focused, loading=False):
         pane.put(0, 1, text, cp(C_DIM) | curses.A_DIM)
         return
     now = time.time()
+    # Repo column fitted to the widest repo in the feed (not just the visible
+    # slice), capped at the old fixed width -- same treatment as SESSIONS.
+    repo_w = (fitter or FITTER).fit(
+        "commits.repo", max(len(c["repo"]) for c in commits), COMMIT_REPO_MAX)
     for i in range(scroll, len(commits)):
         top = i - scroll
         if top >= body:
@@ -548,7 +612,8 @@ def draw_commits(pane, commits, sel, scroll, focused, loading=False):
         age_attr = base if selected else (
             cp(C_GREEN) | curses.A_BOLD if age < FRESH else cp(C_DIM) | curses.A_DIM)
         col = pane.put(top, 1, cb.ago(age).rjust(4) + "  ", age_attr)
-        col += pane.put(top, col, c["repo"][:14].ljust(min(14, max(1, inner - col))),
+        col += pane.put(top, col,
+                        c["repo"][:repo_w].ljust(min(repo_w, max(1, inner - col))),
                         base if selected else cp(C_BLUE) | curses.A_BOLD)
         subject = c["subject"]
         if c.get("count", 1) > 1:
@@ -585,7 +650,8 @@ def github_cells(e):
     return glyph, color, "  ".join(bits), text_color
 
 
-def draw_github(pane, events, warn, sel, scroll, focused, loading=False):
+def draw_github(pane, events, warn, sel, scroll, focused, loading=False,
+                fitter=None):
     """One line per CI run or open PR, problems pinned at the top."""
     inner = pane.w - 2
     if warn:
@@ -600,6 +666,8 @@ def draw_github(pane, events, warn, sel, scroll, focused, loading=False):
         return
     now = time.time()
     body = pane.h - 2
+    repo_w = (fitter or FITTER).fit(
+        "github.repo", max(len(e["repo"]) for e in events), GITHUB_REPO_MAX)
     for i in range(scroll, len(events)):
         line = i - scroll
         if line >= body:
@@ -616,7 +684,8 @@ def draw_github(pane, events, warn, sel, scroll, focused, loading=False):
         col = pane.put(line, 0, cb.ago(age).rjust(4), age_attr) + 1
         glyph, gcolor, text, tcolor = github_cells(e)
         col += pane.put(line, col, glyph, base if selected else cp(gcolor) | curses.A_BOLD) + 1
-        col += pane.put(line, col, elide(e["repo"], 17).ljust(min(17, max(0, inner - col))),
+        col += pane.put(line, col,
+                        elide(e["repo"], repo_w).ljust(min(repo_w, max(0, inner - col))),
                         base if selected else cp(C_BLUE) | curses.A_BOLD) + 1
         pane.put(line, col, text, base if selected else cp(tcolor))
     hidden = len(events) - (scroll + body)
