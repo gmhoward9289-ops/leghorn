@@ -81,8 +81,11 @@ COMMIT_LIMIT = 40
 # The commits pane scales with the terminal instead of sitting at a fixed width:
 # subjects are the part worth reading, and on a wide display there is room for
 # them. Clamped so it never starves the sessions pane or swallows a whole screen.
-COMMITS_MIN = 50
-COMMITS_MAX = 72
+# Sessions are the point of the dashboard, so the split leans their way: a
+# third of the screen, not two fifths -- the commit rows are one line each now
+# and the detail overlay carries anything a narrow subject clips.
+COMMITS_MIN = 44
+COMMITS_MAX = 64
 SESSIONS_MIN = 72
 # Below this the two-pane split leaves neither pane usable, so commits are dropped.
 MIN_SPLIT_W = COMMITS_MIN + SESSIONS_MIN
@@ -91,7 +94,7 @@ MIN_SPLIT_W = COMMITS_MIN + SESSIONS_MIN
 def commits_width(w, override=None):
     if override:
         return max(20, min(override, w - SESSIONS_MIN))
-    return max(COMMITS_MIN, min(COMMITS_MAX, w * 2 // 5))
+    return max(COMMITS_MIN, min(COMMITS_MAX, w // 3))
 FRESH = 300  # a commit younger than this is "just happened" and gets highlighted
 GITHUB_LIMIT = 40
 GITHUB_INTERVAL = 75  # seconds between gh sweeps; the 5s loop never waits on it
@@ -514,8 +517,14 @@ def draw_sessions(pane, rows, sel, scroll, use_git):
             col += width + GAP
 
 
-def draw_commits(pane, commits, sel, scroll, focused, compact=False, loading=False):
-    """Two lines per commit in the side pane; one line when stacked underneath."""
+def draw_commits(pane, commits, sel, scroll, focused, loading=False):
+    """One line per commit: age, repo, subject.
+
+    The subject is the only part that says what happened, so everything else
+    yields to it -- the repo gets a fixed column, the branch nothing at all
+    (enter opens the detail overlay, which has the full record). A xN tail
+    marks a squashed streak of recurring machine commits.
+    """
     body = pane.h - 2
     inner = pane.w - 2
     if not commits:
@@ -526,38 +535,25 @@ def draw_commits(pane, commits, sel, scroll, focused, compact=False, loading=Fal
         pane.put(0, 1, text, cp(C_DIM) | curses.A_DIM)
         return
     now = time.time()
-    step = 1 if compact else 2
     for i in range(scroll, len(commits)):
-        top = (i - scroll) * step
-        if top + step > body:
+        top = i - scroll
+        if top >= body:
             break
         c = commits[i]
         selected = focused and i == sel
         base = cp(C_SEL) if selected else 0
         if selected:
-            for line in range(step):
-                pane.put(top + line, 0, " " * inner, base)
+            pane.put(top, 0, " " * inner, base)
         age = now - c["ts"]
         age_attr = base if selected else (
             cp(C_GREEN) | curses.A_BOLD if age < FRESH else cp(C_DIM) | curses.A_DIM)
         col = pane.put(top, 1, cb.ago(age).rjust(4) + "  ", age_attr)
-        ref = c["refs"].split(", ")[0] if c["refs"] else ""
-        if compact:
-            # One line, so everything competes with the subject -- which is the
-            # only part that says what actually happened. Repo gets a fixed
-            # column, and the branch yields entirely unless the window is wide.
-            col += pane.put(top, col, c["repo"][:16].ljust(min(16, inner - col)),
-                            base if selected else cp(C_BLUE) | curses.A_BOLD)
-            if ref and inner - col > 60:
-                col += pane.put(top, col + 2, ref[:14],
-                                base if selected else cp(C_DIM) | curses.A_DIM) + 2
-            pane.put(top, col + 2, c["subject"],
-                     base if selected else cp(C_DIM) | curses.A_DIM)
-            continue
-        col += pane.put(top, col, c["repo"], base if selected else cp(C_BLUE) | curses.A_BOLD)
-        if ref:
-            pane.put(top, col, "  " + ref, base if selected else cp(C_DIM) | curses.A_DIM)
-        pane.put(top + 1, 7, c["subject"],
+        col += pane.put(top, col, c["repo"][:14].ljust(min(14, max(1, inner - col))),
+                        base if selected else cp(C_BLUE) | curses.A_BOLD)
+        subject = c["subject"]
+        if c.get("count", 1) > 1:
+            subject += "  x%d" % c["count"]
+        pane.put(top, col + 1, subject,
                  base if selected else cp(C_DIM) | curses.A_DIM)
 
 
@@ -650,7 +646,7 @@ def github_detail(e):
 
 
 def commit_detail(c):
-    return [
+    rows = [
         ("repo", c["repo"]),
         ("commit", c["sha"]),
         ("author", c["author"]),
@@ -658,6 +654,12 @@ def commit_detail(c):
         ("subject", c["subject"]),
         ("age", cb.ago(time.time() - c["ts"]) + " ago"),
     ]
+    if c.get("count", 1) > 1:
+        # A squashed streak: the row stands for a run of near-identical
+        # machine commits, and the fields above describe only the newest.
+        rows.append(("streak", "%d near-identical commits, newest shown"
+                     % c["count"]))
+    return rows
 
 
 def draw_header(win, w, rows, total, updated, busy, sort_mode, filt, gh_events=(),
@@ -1043,11 +1045,10 @@ def _loop(stdscr, model, args):
                 pane = Pane(stdscr, 1, sessions.w + 1, body_h, commits_w,
                             "COMMITS", focus == "commits")
             pane.frame()
-            cstep = 1 if stacked else 2
-            cvisible = max(1, (pane.h - 2) // cstep)
+            cvisible = max(1, pane.h - 2)
             commit_scroll = clamp_scroll(commit_sel, commit_scroll, cvisible)
             draw_commits(pane, commits, commit_sel, commit_scroll,
-                         focus == "commits", compact=stacked, loading=loading)
+                         focus == "commits", loading=loading)
         elif focus == "commits":
             # Same guard the github pane has: never leave focus on a pane the
             # user cannot see, or j/k/enter drive an invisible list.

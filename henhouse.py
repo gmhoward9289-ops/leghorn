@@ -958,8 +958,11 @@ def commit_feed(limit):
     repos = [p for p in sorted(root.iterdir()) if (p / ".git").exists()]
 
     def walk(repo):
+        # Author date, not committer date: a rebase rewrites %ct, which made a
+        # three-day run of scheduled data commits all read "26m" the moment a
+        # branch carrying them was rebased.
         return git(repo, "log", "--all", "--date-order", "-n", str(limit),
-                   "--format=" + SEP.join(("%ct", "%h", "%an", "%D", "%s")))
+                   "--format=" + SEP.join(("%at", "%h", "%an", "%D", "%s")))
 
     commits = []
     # Not a with-block: __exit__ waits for every queued task, which on quit is
@@ -983,7 +986,35 @@ def commit_feed(limit):
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
     commits.sort(key=lambda c: -c["ts"])
-    return commits[:limit]
+    return squash_streaks(commits)[:limit]
+
+
+def squash_streaks(commits):
+    """Collapse machine-generated runs so the feed reads as events, not noise.
+
+    Scheduled data commits (one every six hours, forever) differ only in the
+    timestamp baked into the subject, and a rebased branch duplicates them
+    under fresh SHAs.  Exact duplicates (same repo, author date, subject) are
+    the same logical commit seen on two branches -- dropped.  Consecutive
+    commits whose subjects are identical once digit runs are stripped are one
+    recurring job -- kept as a single row with a count.  Real work differs in
+    words, not just numbers, so it never folds.
+    """
+    seen, out = set(), []
+    for c in commits:
+        ident = (c["repo"], c["ts"], c["subject"])
+        if ident in seen:
+            continue
+        seen.add(ident)
+        streak = (c["repo"], re.sub(r"\d+", "", c["subject"]))
+        if out and out[-1].get("_streak") == streak:
+            out[-1]["count"] += 1
+            continue
+        c = dict(c, count=1, _streak=streak)
+        out.append(c)
+    for c in out:
+        del c["_streak"]
+    return out
 
 
 def fmt_feed(commits, wide, width):
@@ -1003,7 +1034,13 @@ def fmt_feed(commits, wide, width):
     lines = []
     for i, row in enumerate(table):
         cells = [row[j].ljust(widths[j]) for j in range(len(cols))]
-        subject = "SUBJECT" if i == 0 else commits[i - 1]["subject"]
+        if i == 0:
+            subject = "SUBJECT"
+        else:
+            c = commits[i - 1]
+            subject = c["subject"]
+            if c.get("count", 1) > 1:
+                subject += "  x%d" % c["count"]
         if not wide and len(subject) > subject_w:
             subject = subject[: subject_w - 3] + "..."
         lines.append(("  ".join(cells) + "  " + subject).rstrip())
