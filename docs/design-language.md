@@ -115,9 +115,14 @@ Notes that carry meaning beyond hue:
   waiting to be merged) earns the ok color.
 - **Freshness threshold is 5 minutes** (`FRESH = 300`): younger renders ok/bold,
   older renders secondary/dim.
-- **Blue needs help.** Plain ANSI blue (4) is illegible on common dark
-  palettes; request xterm-256 index 12 when 16+ colors exist, and always pair
-  blue with bold so 8-color terminals brighten it.
+- **Blue needs help.** Plain ANSI blue is illegible on common dark palettes;
+  request the bright variant when 16+ colors exist, and always pair blue with
+  bold so 8-color terminals brighten it. How you ask matters: through SGR
+  escapes, `38;5;12` means xterm bright blue because the *terminal* owns the
+  palette. Through curses, ask for `COLOR_BLUE + 8`, never a literal index —
+  windows-curses (PDCurses) numbers colors in Windows-console order
+  (BLUE=1, RED=4), so a literal 12 there is bright *red*. Every repo name in
+  the flock rendered red on Windows until this was found (2026-09-05).
 - Selection is the one painted background: black on cyan.
 
 ## Glyph vocabulary
