@@ -15,25 +15,39 @@ jobs:
     # the first two; Windows gets it from the windows-curses wheel (declared
     # in pyproject.toml, platform-gated), which is why this job installs it
     # explicitly below rather than relying on the package install step alone.
-    # 3.14 is here because it is what the primary dev box actually runs -- every
-    # local test run happened on an interpreter CI never exercised. macos-15-intel
-    # is here because macos-latest is arm64 now, so Intel Macs were untested.
-    # (It replaced macos-13, whose image GitHub retired in Dec 2025 -- jobs
-    # asking for it queue forever. macos-15-intel is the designated successor,
-    # available until Aug 2027; when it goes, the Intel leg goes with it.)
     #
-    # Windows is excluded from 3.14 on purpose: windows-curses wheels top out at
-    # 3.13 (see pyproject.toml), so that leg would fail on dependency resolution
-    # rather than on anything in this repo -- a red X that teaches nothing. Drop
-    # the exclusion once upstream ships a 3.14 wheel.
+    # This is deliberately not a full os x python cross product. The
+    # interpreter is tested on Linux, where a leg costs seconds: 3.9 is the
+    # floor, 3.13 is what the Homebrew formula pins, and 3.14 is what the
+    # primary dev box actually runs (every local test run used it while CI
+    # never did, until it was added). The other two platforms are here to
+    # prove the platform claim, not to re-test the interpreter three times:
+    #
+    # - macOS gets one leg, on 3.13, because that is the python@3.13 the
+    #   formula installs -- the interpreter nearly every Mac user runs this
+    #   under. There is no Intel leg: this is pure-Python stdlib code with no
+    #   compiled dependency on macOS, so arm64 vs x86_64 cannot change a
+    #   result. (macos-15-intel used to be here, and macos-13 before GitHub
+    #   retired that image in Dec 2025. Six macOS legs per PR were re-running
+    #   the same stdlib on the scarcest runners GitHub has.)
+    # - Windows gets the floor and the ceiling, because curses there is a
+    #   per-interpreter binary wheel, so each Python is a genuinely different
+    #   artifact. The ceiling is 3.13, not 3.14: windows-curses wheels top out
+    #   at 3.13 (see pyproject.toml), so a 3.14 leg would fail on dependency
+    #   resolution rather than on anything in this repo -- a red X that
+    #   teaches nothing. Raise it once upstream ships a 3.14 wheel.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
+        os: [ubuntu-latest]
         python: ["3.9", "3.13", "3.14"]
-        exclude:
+        include:
+          - os: macos-latest
+            python: "3.13"
           - os: windows-latest
-            python: "3.14"
+            python: "3.9"
+          - os: windows-latest
+            python: "3.13"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -135,3 +149,28 @@ jobs:
         with:
           path: leghorn.py,henhouse.py,docs,.
           skip: .git,*.pyc,__pycache__,tests/fixtures
+
+  # The branch ruleset requires this one check instead of naming every job
+  # above. Required checks match by name, and a matrix leg's name is its
+  # parameters, so each time the matrix changed the ruleset kept demanding
+  # legs that no longer existed: after #38 swapped macos-13 for macos-15-intel,
+  # every PR sat on "test (macos-13, ...) -- Expected, waiting for status"
+  # and was mergeable only through admin bypass. This job's name never
+  # changes; what it asserts is "every job in ci.yml succeeded".
+  #
+  # `if: always()` is load-bearing. Without it a failed dependency skips this
+  # job, and a skipped required check shows as pending forever rather than
+  # failed. The jq line then does the real gating: success only, so a
+  # cancelled or skipped job fails the gate instead of slipping through as
+  # merely not-a-failure.
+  ci-ok:
+    if: always()
+    needs: [test, packaging, security, codespell]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job in ci.yml succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS"
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' > /dev/null
