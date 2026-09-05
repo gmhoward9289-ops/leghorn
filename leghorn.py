@@ -34,6 +34,7 @@ git plumbing. It never writes to a tree, a registry or a session.
 from __future__ import annotations
 
 import argparse
+import collections
 import importlib.machinery
 import importlib.util
 import sys
@@ -390,10 +391,56 @@ def loading_text():
 
 
 GAP = 2
-# Screen order of the session columns, and the width each wants.
+# Screen order of the session columns, and the MOST width each may claim.
+# These are ceilings, not fixed widths: a column is drawn only as wide as its
+# widest current cell (see ColumnFitter), so short names no longer leave a
+# dead gutter the size of the longest name the column could ever hold.
 COL_ORDER = ("dot", "name", "project", "branch", "status", "ctx", "git", "age", "task")
 COL_WIDTH = {"dot": 1, "name": 11, "project": 19, "branch": 14,
              "status": 11, "ctx": 5, "git": 9, "age": 4, "task": 10}
+
+# How long, in seconds, a column width remembers content it has seen. Widths
+# fit to content, but content churns every refresh -- a column that snapped
+# narrower the instant its widest row scrolled off would make the whole table
+# dance. Growing is immediate; shrinking waits until the wider content has been
+# gone for this long. Measured in wall-clock time, not frames: the draw loop
+# runs once per keypress as well as once per 250ms timeout, so a frame count
+# would expire under key-repeat in about a second and never expire at all
+# while a draw is paused.
+FIT_MEMORY = 10.0
+
+
+class ColumnFitter:
+    """Content-fitted column widths with hysteresis.
+
+    fit() returns the width a column should be drawn at: the widest content
+    seen for it within the last FIT_MEMORY seconds, capped at the column's
+    ceiling. Growth applies on the very next frame; shrinking only once the
+    wider rows have stayed gone for the whole memory window, so widths are
+    stable frame-to-frame while rows churn. `clock` is injectable so tests
+    can step time deterministically.
+    """
+
+    def __init__(self, memory=FIT_MEMORY, clock=time.monotonic):
+        self.memory = memory
+        self.clock = clock
+        self._history = {}  # key -> deque of (seen_at, capped natural width)
+
+    def fit(self, key, natural, cap):
+        natural = max(1, min(natural, cap))
+        now = self.clock()
+        hist = self._history.setdefault(key, collections.deque())
+        hist.append((now, natural))
+        cutoff = now - self.memory
+        # Drop entries older than the window; the newest is always kept, so
+        # the max below is never over an empty sequence.
+        while len(hist) > 1 and hist[0][0] < cutoff:
+            hist.popleft()
+        return max(width for _, width in hist)
+
+
+# One shared fitter for the whole screen; keys are namespaced per pane.
+FITTER = ColumnFitter()
 
 
 def elide(text, width):
@@ -421,8 +468,21 @@ COL_OPTIONAL = ("branch", "age")
 TASK_COMFORT = 24
 
 
-def session_layout(inner_w, use_git):
-    """key -> width for one session row, fitted to the space actually available."""
+def session_layout(inner_w, use_git, widths=None):
+    """key -> width for one session row.
+
+    WHICH columns appear is decided from the COL_WIDTH ceilings alone, exactly
+    as before content fitting existed: the bidding order, the task column's
+    comfort claim and its leftover grab all run against the ceilings. `widths`
+    (content-fitted, from fitted_widths) then only narrows the columns that
+    were chosen, and every cell of gutter it saves flows to the task column.
+
+    Membership must not depend on fitted widths. Fitting grows the moment a
+    wider row appears, so if it also drove the bids, one new long name would
+    evict branch and age that very frame and bring them back when the memory
+    window expired -- hysteresis in one direction only. Deciding the set from
+    the fixed ceilings makes the set a function of the terminal width alone.
+    """
     chosen, used = {}, 0
 
     def take(key, width):
@@ -446,10 +506,37 @@ def session_layout(inner_w, use_git):
     # Leftovers go to the task -- the only column never complete at any width.
     if "task" in chosen:
         chosen["task"] += inner_w - used
+    if widths:
+        saved = 0
+        for key in chosen:
+            if key == "task" or key not in widths:
+                continue
+            fitted = max(1, min(widths[key], chosen[key]))
+            saved += chosen[key] - fitted
+            chosen[key] = fitted
+        if "task" in chosen:
+            chosen["task"] += saved
     return chosen
 
 
-def session_cells(r, layout, use_git):
+# Columns whose drawn width is fitted to content. Not `task`: it is the
+# leftover column, sized by session_layout from whatever the others leave, so a
+# content fit for it would be computed and thrown away. Not `dot`: its ceiling
+# is one cell, so the fit is always 1.
+COL_FITTED = tuple(k for k in COL_ORDER if k not in ("dot", "task"))
+
+
+def fitted_widths(cell_rows, fitter):
+    """key -> content-fitted width bid, over every row (not just the visible
+    ones, so scrolling never reflows the table)."""
+    widths = {}
+    for key in COL_FITTED:
+        widest = max((len(cells[key][0]) for cells in cell_rows), default=1)
+        widths[key] = fitter.fit("sessions." + key, widest, COL_WIDTH[key])
+    return widths
+
+
+def session_cells(r, use_git):
     """key -> (text, colour) for the columns this layout kept."""
     g = r.get("git") or {}
     loc = r["project"]
@@ -487,23 +574,24 @@ def session_cells(r, layout, use_git):
     }
 
 
-def draw_sessions(pane, rows, sel, scroll, use_git):
+def draw_sessions(pane, rows, sel, scroll, use_git, fitter=None):
     """One line per session, roost-style: it has to survive an 80-column window."""
     body = pane.h - 2
     inner = pane.w - 2
-    layout = session_layout(inner, use_git)
+    cell_rows = [session_cells(r, use_git) for r in rows]
+    layout = session_layout(inner, use_git,
+                            fitted_widths(cell_rows, fitter or FITTER))
 
     for i in range(scroll, len(rows)):
         line = i - scroll
         if line >= body:
             break
-        r = rows[i]
         selected = i == sel
         base = cp(C_SEL) if selected else 0
         if selected:
             pane.put(line, 0, " " * inner, base)
 
-        cells = session_cells(r, layout, use_git)
+        cells = cell_rows[i]
         col = 0
         for key in COL_ORDER:
             if key not in layout:
@@ -522,7 +610,11 @@ def draw_sessions(pane, rows, sel, scroll, use_git):
             col += width + GAP
 
 
-def draw_commits(pane, commits, sel, scroll, focused, loading=False):
+COMMIT_REPO_MAX = 14
+GITHUB_REPO_MAX = 17
+
+
+def draw_commits(pane, commits, sel, scroll, focused, loading=False, fitter=None):
     """One line per commit: age, repo, subject.
 
     The subject is the only part that says what happened, so everything else
@@ -540,6 +632,10 @@ def draw_commits(pane, commits, sel, scroll, focused, loading=False):
         pane.put(0, 1, text, cp(C_DIM) | curses.A_DIM)
         return
     now = time.time()
+    # Repo column fitted to the widest repo in the feed (not just the visible
+    # slice), capped at the old fixed width -- same treatment as SESSIONS.
+    repo_w = (fitter or FITTER).fit(
+        "commits.repo", max(len(c["repo"]) for c in commits), COMMIT_REPO_MAX)
     for i in range(scroll, len(commits)):
         top = i - scroll
         if top >= body:
@@ -553,7 +649,8 @@ def draw_commits(pane, commits, sel, scroll, focused, loading=False):
         age_attr = base if selected else (
             cp(C_GREEN) | curses.A_BOLD if age < FRESH else cp(C_DIM) | curses.A_DIM)
         col = pane.put(top, 1, cb.ago(age).rjust(4) + "  ", age_attr)
-        col += pane.put(top, col, c["repo"][:14].ljust(min(14, max(1, inner - col))),
+        col += pane.put(top, col,
+                        c["repo"][:repo_w].ljust(min(repo_w, max(1, inner - col))),
                         base if selected else cp(C_BLUE) | curses.A_BOLD)
         subject = c["subject"]
         if c.get("count", 1) > 1:
@@ -590,7 +687,8 @@ def github_cells(e):
     return glyph, color, "  ".join(bits), text_color
 
 
-def draw_github(pane, events, warn, sel, scroll, focused, loading=False):
+def draw_github(pane, events, warn, sel, scroll, focused, loading=False,
+                fitter=None):
     """One line per CI run or open PR, problems pinned at the top."""
     inner = pane.w - 2
     if warn:
@@ -605,6 +703,8 @@ def draw_github(pane, events, warn, sel, scroll, focused, loading=False):
         return
     now = time.time()
     body = pane.h - 2
+    repo_w = (fitter or FITTER).fit(
+        "github.repo", max(len(e["repo"]) for e in events), GITHUB_REPO_MAX)
     for i in range(scroll, len(events)):
         line = i - scroll
         if line >= body:
@@ -621,7 +721,8 @@ def draw_github(pane, events, warn, sel, scroll, focused, loading=False):
         col = pane.put(line, 0, cb.ago(age).rjust(4), age_attr) + 1
         glyph, gcolor, text, tcolor = github_cells(e)
         col += pane.put(line, col, glyph, base if selected else cp(gcolor) | curses.A_BOLD) + 1
-        col += pane.put(line, col, elide(e["repo"], 17).ljust(min(17, max(0, inner - col))),
+        col += pane.put(line, col,
+                        elide(e["repo"], repo_w).ljust(min(repo_w, max(0, inner - col))),
                         base if selected else cp(C_BLUE) | curses.A_BOLD) + 1
         pane.put(line, col, text, base if selected else cp(tcolor))
     hidden = len(events) - (scroll + body)
