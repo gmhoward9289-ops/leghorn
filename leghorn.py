@@ -34,6 +34,7 @@ git plumbing. It never writes to a tree, a registry or a session.
 from __future__ import annotations
 
 import argparse
+import collections
 import importlib.machinery
 import importlib.util
 import sys
@@ -393,35 +394,44 @@ COL_ORDER = ("dot", "name", "project", "branch", "status", "ctx", "git", "age", 
 COL_WIDTH = {"dot": 1, "name": 11, "project": 19, "branch": 14,
              "status": 11, "ctx": 5, "git": 9, "age": 4, "task": 10}
 
-# How many frames of content history a column width remembers. Widths fit to
-# content, but content churns every refresh -- a column that snapped narrower
-# the instant its widest row scrolled off would make the whole table dance.
-# Growing is immediate; shrinking waits until the wider content has been gone
-# for this many frames (~10s at the 250ms input timeout).
-FIT_MEMORY = 40
+# How long, in seconds, a column width remembers content it has seen. Widths
+# fit to content, but content churns every refresh -- a column that snapped
+# narrower the instant its widest row scrolled off would make the whole table
+# dance. Growing is immediate; shrinking waits until the wider content has been
+# gone for this long. Measured in wall-clock time, not frames: the draw loop
+# runs once per keypress as well as once per 250ms timeout, so a frame count
+# would expire under key-repeat in about a second and never expire at all
+# while a draw is paused.
+FIT_MEMORY = 10.0
 
 
 class ColumnFitter:
     """Content-fitted column widths with hysteresis.
 
     fit() returns the width a column should be drawn at: the widest content
-    seen for it over the last FIT_MEMORY calls, capped at the column's
+    seen for it within the last FIT_MEMORY seconds, capped at the column's
     ceiling. Growth applies on the very next frame; shrinking only once the
     wider rows have stayed gone for the whole memory window, so widths are
-    stable frame-to-frame while rows churn.
+    stable frame-to-frame while rows churn. `clock` is injectable so tests
+    can step time deterministically.
     """
 
-    def __init__(self, memory=FIT_MEMORY):
+    def __init__(self, memory=FIT_MEMORY, clock=time.monotonic):
         self.memory = memory
-        self._history = {}  # key -> list of recent (capped) natural widths
+        self.clock = clock
+        self._history = {}  # key -> deque of (seen_at, capped natural width)
 
     def fit(self, key, natural, cap):
         natural = max(1, min(natural, cap))
-        hist = self._history.setdefault(key, [])
-        hist.append(natural)
-        if len(hist) > self.memory:
-            del hist[: len(hist) - self.memory]
-        return max(hist)
+        now = self.clock()
+        hist = self._history.setdefault(key, collections.deque())
+        hist.append((now, natural))
+        cutoff = now - self.memory
+        # Drop entries older than the window; the newest is always kept, so
+        # the max below is never over an empty sequence.
+        while len(hist) > 1 and hist[0][0] < cutoff:
+            hist.popleft()
+        return max(width for _, width in hist)
 
 
 # One shared fitter for the whole screen; keys are namespaced per pane.
@@ -454,15 +464,20 @@ TASK_COMFORT = 24
 
 
 def session_layout(inner_w, use_git, widths=None):
-    """key -> width for one session row, fitted to the space actually available.
+    """key -> width for one session row.
 
-    widths gives each fixed column's bid (content-fitted, from fitted_widths);
-    absent, the COL_WIDTH ceilings are used. The bidding order, the task
-    column's comfort claim and its leftover grab are unchanged -- fitting only
-    shrinks what the fixed columns ask for, which leaves the leftovers larger.
+    WHICH columns appear is decided from the COL_WIDTH ceilings alone, exactly
+    as before content fitting existed: the bidding order, the task column's
+    comfort claim and its leftover grab all run against the ceilings. `widths`
+    (content-fitted, from fitted_widths) then only narrows the columns that
+    were chosen, and every cell of gutter it saves flows to the task column.
+
+    Membership must not depend on fitted widths. Fitting grows the moment a
+    wider row appears, so if it also drove the bids, one new long name would
+    evict branch and age that very frame and bring them back when the memory
+    window expired -- hysteresis in one direction only. Deciding the set from
+    the fixed ceilings makes the set a function of the terminal width alone.
     """
-    if widths is None:
-        widths = COL_WIDTH
     chosen, used = {}, 0
 
     def take(key, width):
@@ -477,23 +492,40 @@ def session_layout(inner_w, use_git, widths=None):
     for key in COL_CORE:
         if key == "git" and not use_git:
             continue
-        take(key, widths[key])
+        take(key, COL_WIDTH[key])
     # Claim a readable task column before the optional ones bid for the same
     # space: a 12-character claim is noise, and branch is the cheaper thing to lose.
     take("task", TASK_COMFORT) or take("task", COL_WIDTH["task"])
     for key in COL_OPTIONAL:
-        take(key, widths[key])
+        take(key, COL_WIDTH[key])
     # Leftovers go to the task -- the only column never complete at any width.
     if "task" in chosen:
         chosen["task"] += inner_w - used
+    if widths:
+        saved = 0
+        for key in chosen:
+            if key == "task" or key not in widths:
+                continue
+            fitted = max(1, min(widths[key], chosen[key]))
+            saved += chosen[key] - fitted
+            chosen[key] = fitted
+        if "task" in chosen:
+            chosen["task"] += saved
     return chosen
+
+
+# Columns whose drawn width is fitted to content. Not `task`: it is the
+# leftover column, sized by session_layout from whatever the others leave, so a
+# content fit for it would be computed and thrown away. Not `dot`: its ceiling
+# is one cell, so the fit is always 1.
+COL_FITTED = tuple(k for k in COL_ORDER if k not in ("dot", "task"))
 
 
 def fitted_widths(cell_rows, fitter):
     """key -> content-fitted width bid, over every row (not just the visible
     ones, so scrolling never reflows the table)."""
     widths = {}
-    for key in COL_ORDER:
+    for key in COL_FITTED:
         widest = max((len(cells[key][0]) for cells in cell_rows), default=1)
         widths[key] = fitter.fit("sessions." + key, widest, COL_WIDTH[key])
     return widths
