@@ -143,12 +143,17 @@ def init_colors():
         bg = -1
     except curses.error:
         bg = curses.COLOR_BLACK
-    # Plain ANSI blue (index 4) is the one basic color that reads as barely
-    # legible on a black background in most terminal palettes -- ask for the
-    # xterm-256 bright blue (12) where the terminal actually offers it. Every
+    # Plain blue is the one basic color that reads as barely legible on a
+    # black background in most terminal palettes -- ask for the bright variant
+    # where the terminal actually offers 16+ colors. Bright colors live at
+    # basic+8, but the *basic* index is not portable: ncurses uses xterm
+    # ordering (COLOR_BLUE=4, so bright blue is 12) while PDCurses, which
+    # backs windows-curses, uses Windows console ordering (COLOR_BLUE=1,
+    # COLOR_RED=4) -- there a literal 12 is 8+4, bright RED. Derive it from
+    # whatever this curses calls blue instead of hard-coding xterm's 12. Every
     # C_BLUE use also carries A_BOLD (below), which is what makes an 8-color
     # terminal render the dark variant brighter in the first place.
-    blue = 12 if curses.COLORS >= 16 else curses.COLOR_BLUE
+    blue = curses.COLOR_BLUE + 8 if curses.COLORS >= 16 else curses.COLOR_BLUE
     for pair, fg in (
         (C_DIM, curses.COLOR_WHITE),
         (C_GREEN, curses.COLOR_GREEN),
