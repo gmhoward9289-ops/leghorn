@@ -662,57 +662,108 @@ def commit_detail(c):
     return rows
 
 
-def draw_header(win, w, rows, total, updated, busy, sort_mode, filt, gh_events=(),
-                speed=DEFAULT_SPEED):
-    contested = sum(1 for r in rows if r["contested"])
-    dirty = len({r["git_dir"] for r in rows if cb.uncommitted(r)})
-    behind = len({r["git_dir"] for r in rows if (r.get("git") or {}).get("behind")})
+def header_chips(rows_all, shown, gh_events=()):
+    """The header's stat chips, in screen order, as (text, color).
+
+    Every count is over rows_all -- the whole fleet -- never the filtered
+    view. The header exists to say what the dashboard is doing, and "3
+    uncommitted" must mean the same three trees whether or not `f` has
+    narrowed the list below it; the one chip that describes the filtered
+    view says so by name ("N shown"). Deduplicating on git_dir keeps two
+    sessions in one tree from counting its dirt twice.
+    """
+    total = len(rows_all)
+    contested = sum(1 for r in rows_all if r["contested"])
+    dirty = len({r["git_dir"] for r in rows_all if cb.uncommitted(r)})
+    behind = len({r["git_dir"] for r in rows_all
+                  if (r.get("git") or {}).get("behind")})
     ci_red = sum(1 for e in gh_events
                  if (e["kind"] == "run" and e.get("state") == "failed")
                  or (e["kind"] == "pr" and e.get("checks") == "red"))
     ci_live = sum(1 for e in gh_events
                   if e["kind"] == "run" and e.get("state") in ("in_progress", "queued"))
 
+    chips = [("%d sessions" % total, C_DIM)]
+    if shown != total:
+        chips.append(("%d shown" % shown, C_CYAN))
+    if contested:
+        chips.append(("%d shared" % contested, C_MAGENTA))
+    if dirty:
+        chips.append(("%d uncommitted" % dirty, C_YELLOW))
+    if behind:
+        chips.append(("%d behind" % behind, C_MAGENTA))
+    if ci_red:
+        chips.append(("%d ci red" % ci_red, C_RED))
+    if ci_live:
+        chips.append(("%d ci running" % ci_live, C_GREEN))
+    return chips
+
+
+def chips_end(col, chips):
+    """Column just past the gap after the last chip, drawn from col: each chip
+    is its text plus one trailing blank, and every chip but the first is
+    preceded by a two-cell "· " separator."""
+    for i, (text, _) in enumerate(chips):
+        col += (2 if i else 0) + len(text) + 1
+    return col
+
+
+def plan_header(w, col, chips, rights):
+    """Decide what the header keeps at width w: (chips to draw, right text).
+
+    The shedding order is fixed and deliberate. First the right-hand mode
+    labels go, tier by tier (rights is ordered fullest first and ends with the
+    bare clock). Only if the bare clock still does not fit do the stat chips
+    go, right to left -- the clock is the LAST thing the header gives up,
+    because a wall display must always answer "when did this last update".
+    A header that keeps "1 behind" and drops the clock has it backwards, and
+    that is exactly what the previous implementation did at 40 and 60
+    columns: it stopped adding chips at the edge but never removed one to
+    make room for the clock.
+
+    Nothing may touch the final column (w - 1): addstr there wraps onto row
+    1, the SESSIONS pane's top border. Chips end before it by construction
+    (chips_end(...) < w), and right is placed so its last cell is w - 2.
+    Returns right=None only when not even the bare clock fits beside the
+    product name.
+    """
+    chips = list(chips)
+    while chips and chips_end(col, chips) >= w:
+        chips.pop()
+    for right in rights:
+        if w - len(right) - 2 > chips_end(col, chips):
+            return chips, right
+    clock = rights[-1]
+    while chips:
+        chips.pop()
+        if w - len(clock) - 2 > chips_end(col, chips):
+            return chips, clock
+    return chips, None
+
+
+def draw_header(win, w, rows_all, shown, updated, busy, sort_mode, filt,
+                gh_events=(), speed=DEFAULT_SPEED):
+    """Row 0: product name, fleet-wide stat chips, right-aligned modes and
+    clock. rows_all is the unfiltered fleet; shown is how many rows the
+    filtered list below is actually displaying."""
+    chips = header_chips(rows_all, shown, gh_events)
+    clock = time.strftime("%H:%M:%S", time.localtime(updated)) if updated else "--:--:--"
+    clock += " ●" if busy else "  "
+    rights = ("sort:%s  filter:%s  speed:%s  %s" % (sort_mode, filt, speed, clock),
+              "sort:%s  filter:%s  %s" % (sort_mode, filt, clock),
+              clock)
+    col = len(NAME) + 3
+    kept, right = plan_header(w, col, chips, rights)
     try:
         win.addstr(0, 1, NAME, cp(C_CYAN) | curses.A_BOLD)
-        col = len(NAME) + 3
-        stats = [("%d sessions" % total, C_DIM)]
-        if len(rows) != total:
-            stats.append(("%d shown" % len(rows), C_CYAN))
-        if contested:
-            stats.append(("%d shared" % contested, C_MAGENTA))
-        if dirty:
-            stats.append(("%d uncommitted" % dirty, C_YELLOW))
-        if behind:
-            stats.append(("%d behind" % behind, C_MAGENTA))
-        if ci_red:
-            stats.append(("%d ci red" % ci_red, C_RED))
-        if ci_live:
-            stats.append(("%d ci running" % ci_live, C_GREEN))
-        # Stop before the last column rather than at it: addstr writing into the
-        # final cell wraps onto row 1, which is the SESSIONS pane's top border,
-        # and the stray character sticks there until the header shrinks again.
-        for i, (text, color) in enumerate(stats):
-            need = (2 if i else 0) + len(text)
-            if col + need >= w - 1:
-                break
+        for i, (text, color) in enumerate(kept):
             if i:
                 win.addstr(0, col, "· ", cp(C_DIM) | curses.A_DIM)
                 col += 2
             win.addstr(0, col, text, cp(color))
             col += len(text) + 1
-
-        clock = time.strftime("%H:%M:%S", time.localtime(updated)) if updated else "--:--:--"
-        clock += " ●" if busy else "  "
-        # Narrow terminals lose the mode labels before they lose the clock --
-        # "when did this last update" is the one thing a wall display must keep.
-        for right in ("sort:%s  filter:%s  speed:%s  %s"
-                      % (sort_mode, filt, speed, clock),
-                      "sort:%s  filter:%s  %s" % (sort_mode, filt, clock),
-                      clock):
-            if w - len(right) - 2 > col:
-                win.addstr(0, w - len(right) - 1, right, cp(C_DIM) | curses.A_DIM)
-                break
+        if right is not None:
+            win.addstr(0, w - len(right) - 1, right, cp(C_DIM) | curses.A_DIM)
     except curses.error:
         pass
 
@@ -1054,7 +1105,9 @@ def _loop(stdscr, model, args):
             # user cannot see, or j/k/enter drive an invisible list.
             focus = "sessions"
 
-        draw_header(stdscr, w, rows, len(rows_all), updated, busy, sort_mode, filt,
+        # The whole fleet, not the filtered rows: the chips must not change
+        # meaning when `f` narrows the list (only "N shown" describes it).
+        draw_header(stdscr, w, rows_all, len(rows), updated, busy, sort_mode, filt,
                     gh_events, speed)
         note = message or error or (
             "%s -- status and context unavailable" % warn if warn else "")
