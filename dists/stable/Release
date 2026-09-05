@@ -1,24 +1,24 @@
 Architectures: all
 Codename: stable
 Components: main
-Date: Sun, 30 Aug 2026 13:40:29 +0000
+Date: Sat, 05 Sep 2026 14:34:57 +0000
 Description: live dashboard for Claude Code sessions, git state, and GitHub CI
 Label: leghorn
 Origin: leghorn
 Suite: stable
 MD5Sum:
- e55026d46b5b26512a3f82f219406fc5              215 Release
- 544ea1090c0a360fb625e416541575e1            19440 main/binary-all/Packages
- 9eea759312ee9167e0f88405a1037c3f             3919 main/binary-all/Packages.gz
+ 6c3a9408a30143d5e99fa92b0575ed8b              215 Release
+ 1e3cad4b5677eb9aa8d64efbeaf7f198            20522 main/binary-all/Packages
+ df1cd3d8ee8089f160396c992550009a             4123 main/binary-all/Packages.gz
 SHA1:
- 825943c337663a9146e8a146eac59ecf2c7e070b              215 Release
- 330583a870bb02322f1233b1bd2588ad87199d54            19440 main/binary-all/Packages
- afc1a6052aa7b6d097450834dc10cdf7816e57bd             3919 main/binary-all/Packages.gz
+ ef7c6fe3c88a7b8d20d11c58bae33c37ad117a45              215 Release
+ f68fe822ea1e6d9aad619e16acf4b92ab5125304            20522 main/binary-all/Packages
+ 82bc4fb49a209d3af2e779aca86f0880cf5a7e26             4123 main/binary-all/Packages.gz
 SHA256:
- 41d7fac612a00fa575a85161841a86ea8abdb9ef31bc55fc3f9cfec4af62320a              215 Release
- 532f740efef95bfd3d372d319bda7c7c3af3230833f7d7ab8ed90b6aee55bdc0            19440 main/binary-all/Packages
- 120c3377105a34f32028debc512ad109308e8edd0432427d4dd0b3accc78185b             3919 main/binary-all/Packages.gz
+ 435c405a70b4390b6415a682e12c7d759708a309b032304948c97277ef3e9f3f              215 Release
+ afe39446f73d26e8db188b9b6070388d6d27e954851f6167caf2ceb49817e3a7            20522 main/binary-all/Packages
+ 8c6f74b8b4fe3d395da6311cd4f6967b899176802b48c1aa45fdc97f8cfc2af4             4123 main/binary-all/Packages.gz
 SHA512:
- fdafe0b53c788021919a4142b950c1f45cc8f532a5756586f9d22ce2349888b653c1fb4362947cb6bf54c8afa6d8cfe2fec2e674201e763355705b0300023ef2              215 Release
- 748ac5cea2a53138a804c3b1fd70e2a0dd9013163aaca4833a74a25909e542f7146955f6cfdd09ebf492ed6f5b1f1b64f9c6687501a850f0be1cea85e655af78            19440 main/binary-all/Packages
- 65e5076a6ef7235fde95ee8ed58a15a508f170aba047b2dbc58a6af0640947f5decd9ba51164d0f3c05866c7598cbe326c417806e60e088a2cc9e0b233420983             3919 main/binary-all/Packages.gz
+ dbc895509e4b400fca79c40223976297ffc050cfd805a861a7f692383b18cdaa8e1a1097ce1d8bc23f2857c824f4c190cfe4135539f93dd4f5038a82214a3101              215 Release
+ 01fbe2ea1f3d9023b4f9c8553541ce6e5c63350a0ac425837674503bd2ce658e98539fb87165bd5776b0fb6adc1338ce4216aa08c9be5ef5fb1cf8a4f5d28f37            20522 main/binary-all/Packages
+ 94f55f76447aa9ee4dfb86f1791dc2c1422493ac50e96196a4409523184a4ce1d52781f8d48e0c55e149c61493db83e8a221cd6a65b7924078d0639ca99f4f69             4123 main/binary-all/Packages.gz
