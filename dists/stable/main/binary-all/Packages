@@ -288,6 +288,30 @@ Description: live dashboard for Claude Code sessions, git state, and GitHub CI
 
 Package: leghorn
 Architecture: all
+Version: 0.4.19
+Priority: optional
+Section: utils
+Maintainer: George M. Howard <dev@swamplink.com>
+Depends: python3 (>= 3.9)
+Recommends: gh, git
+Filename: pool/main/l/leghorn/leghorn_0.4.19_all.deb
+Size: 45584
+MD5sum: e4e0b2e2ad8f30ceee2949650a5b3cf6
+SHA1: 6edcbf46ba389f9f06aa0da8a5bdd1da4425839e
+SHA256: 7a35623b2f8e1ab8098c3112cc04b8ae5360c902e21f83a2735542b60d9d5922
+SHA512: c786c630a5e36bf419e18da92d2ae4962afb7fe4f1a0e64dc954eaf7309c400a7070e9702df3bfc4ec8fc260dbc2f62cf971412a4103c58b300b578b3191ce05
+Homepage: https://github.com/gmhoward9289-ops/leghorn
+Description: live dashboard for Claude Code sessions, git state, and GitHub CI
+ A full-screen curses view you leave open on a second monitor while many
+ Claude Code sessions work: every live session joined to its worktree and
+ real git state, a commit feed across every repo, and a GitHub pane of CI
+ runs and open PRs with failures pinned until they go green.
+ .
+ Reads only local Claude Code state and runs read-only git and gh. It never
+ writes to a tree, a registry or a session.
+
+Package: leghorn
+Architecture: all
 Version: 0.4.1
 Priority: optional
 Section: utils
